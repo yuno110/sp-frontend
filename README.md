@@ -1,0 +1,59 @@
+# sp-frontend
+
+`sp-auth`·`sp-member`·`sp-board` 세 서비스가 실제로 엮여 도는지 **브라우저에서 확인하는 화면**이다. 제품 화면이 아니다.
+
+## 띄우기
+
+세 서비스가 먼저 떠 있어야 한다. MySQL과 `application-local.yml`은 각 저장소의 `CLAUDE.md`를 본다.
+
+```bash
+# 세 서비스 (각자 다른 터미널)
+cd ../sp-auth   && ./gradlew bootRun --args='--spring.profiles.active=local'   # :8083
+cd ../sp-member && ./gradlew bootRun --args='--spring.profiles.active=local'   # :8081
+cd ../sp-board  && ./gradlew bootRun --args='--spring.profiles.active=local'   # :8082
+
+# 화면
+pnpm install
+pnpm dev        # http://localhost:3000
+```
+
+**포트 3000을 바꾸지 않는다.** 세 서비스의 `cors.allowed-origins`가 그 값이다.
+
+| 스크립트 | |
+| --- | --- |
+| `pnpm dev` | 개발 서버 (:3000) |
+| `pnpm typecheck` | 타입 검사 |
+| `pnpm test:run` | 단위 테스트 |
+| `pnpm build` | 프로덕션 빌드 |
+
+## 화면
+
+| 경로 | 무엇을 보는가 |
+| --- | --- |
+| `/signup` | **가입 3단계** — 계정(auth) → 로그인(auth) → 프로필(member). 두 서비스가 `sub`로 이어지는 자리 |
+| `/login` | 로그인. 누락·빈 값·형식 오류도 **401 `AU003`**이다 (400이 없다) |
+| `/posts` | 목록·검색·정렬·페이징. 무인증으로 열려 있다 |
+| `/posts/:id` | 상세 + 댓글. 상세에만 `content`가 있다 |
+| `/posts/new` | **작성 — board가 member 내부 API를 호출하는 유일한 경로** |
+| `/posts/mine` | 내가 쓴 글. 조회 키는 쿼리 파라미터가 아니라 JWT `sub` |
+| `/me` | 마이페이지. **한 화면에 두 서비스가 필요하다** — 이메일·가입일은 auth, 닉네임은 member |
+| `/members/:accountId` | 작성자 프로필. 탈퇴한 프로필도 **200**이고 `nickname`이 `"탈퇴한 회원"`이다 |
+| `/tokens` | `A001`·`A002`·`A003`의 경계를 눈으로 본다 |
+
+화면 아래 **요청 기록** 패널이 모든 요청의 서비스·상태·에러 코드·`fieldErrors`를 남긴다. 서버 메시지를 다시 쓰지 않고 그대로 보여준다.
+
+## 볼 만한 것
+
+**member를 내려 보는 것.** `sp-member`만 끄고 글을 쓰면 **503 `S001`**이고, 조회·수정·삭제는 계속 된다. `adr/0012`가 비용으로 수용한 동작이다.
+
+**프로필 없이 글을 쓰는 것.** 가입 1단계만 끝낸 계정으로 작성하면 **403 `S002`**다. 1단계만 끝난 상태는 정상이고, 로그인·탈퇴는 된다.
+
+**닉네임을 바꾸는 것.** 과거 글의 작성자 이름이 바뀌지 않는다 — 스냅샷이고 의도된 동작이다(`adr/0003`).
+
+## 한계
+
+- **만료 토큰을 이 화면에서 만들 수 없다.** 개인키로 서명해야 하고 그 키는 이 저장소에 없다. `/tokens`는 `A001`·`A002`만 재현한다. "만료 + claim 계약 위반이 겹칠 때 member는 `A002`, auth·board는 `A003`"(`api-contract.md` §8.5의 `D-05` 실측)은 서버 쪽에서 서명한 토큰으로 측정한 것이고 여기서 재현되지 않는다
+- e2e 테스트가 없다. 단위 테스트가 덮는 것은 셋뿐이다 — 서비스 주소 배정, 검색 파라미터 조합 규칙, 에러 표시가 `fieldErrors`를 버리지 않는지
+- 접근성·반응형을 다듬지 않았다
+
+정본은 전부 [`sp-docs`](https://github.com/yuno110/sp-docs)에 있다.

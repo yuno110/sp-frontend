@@ -1,0 +1,74 @@
+@import 'tailwindcss';
+
+/**
+ * 토큰 이름은 jworksuite6 프론트(`src/index.css`·`theme/`)의 시맨틱 레이어를 따랐다 —
+ * 색을 마크업에 직접 박지 않고 `bg-elev`·`bg-subtle`·`text-muted`·`text-faint` 처럼
+ * 의미로 쓴다. **선 색의 `line` 네임스페이스는 저쪽에 없다** — 아래 주석이 적는 이름
+ * 충돌을 피하려고 이 저장소가 새로 만든 이름이다.
+ * 테마는 라이트 한 벌이다. 저쪽은 네 벌(jwork-default·kb-securities·aiops·corporate-blue)이고
+ * 그 분기는 이 저장소의 목적(백엔드 확인)에 필요하지 않다.
+ */
+@theme {
+  --font-sans: Pretendard, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+
+  /* 면 */
+  --color-app: #f6f7f9;
+  --color-elev: #ffffff;
+  --color-subtle: #f1f3f5;
+
+  /* 글자 */
+  --color-default: #1f2328;
+  --color-muted: #5b6471;
+  --color-faint: #8b95a1;
+
+  /* 선 — 전경 토큰과 이름이 겹치지 않게 line 네임스페이스를 쓴다.
+     Tailwind v4 는 위의 `--color-default` 하나에서 `text-default` 와 `border-default` 를
+     둘 다 만든다. 선 색을 그 이름으로 가져가면 전경색과 같은 변수를 쓰게 된다.
+     자세한 경위는 CLAUDE.md 의 "기술 스택" 절에 있다. */
+  --color-line: #dfe3e8;
+  --color-line-soft: #eceff2;
+
+  /* 강조 */
+  --color-accent-50: #eef4ff;
+  --color-accent-500: #3b6fe0;
+  --color-accent-600: #2f5bc4;
+  --color-accent-700: #26489c;
+
+  /* 상태 */
+  --color-danger-50: #fdeeee;
+  --color-danger-500: #d83b3b;
+  --color-danger-600: #b92f2f;
+  --color-success-50: #eaf7ef;
+  --color-success-600: #1f8a4c;
+  --color-warn-50: #fdf5e6;
+  --color-warn-600: #a56a0b;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-app);
+  color: var(--color-default);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
