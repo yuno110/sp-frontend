@@ -10,6 +10,7 @@ import { MyPostsPage } from '@/pages/MyPostsPage';
 import { MyPage } from '@/pages/MyPage';
 import { MemberProfilePage } from '@/pages/MemberProfilePage';
 import { TokenLabPage } from '@/pages/TokenLabPage';
+import { DEV_ONLY } from '@/lib/devOnly';
 import { useAuthStore } from '@/stores/authStore';
 
 /**
@@ -80,7 +81,8 @@ export const router = createBrowserRouter([
           </RequireToken>
         ),
       },
-      { path: 'tokens', element: <TokenLabPage /> },
+      // 개발 빌드에서만 있다. 프로덕션 빌드에서는 이 경로가 아래 `*` 에 걸려 목록으로 간다.
+      ...(DEV_ONLY ? [{ path: 'tokens', element: <TokenLabPage /> }] : []),
       { path: '*', element: <Navigate to="/posts" replace /> },
     ],
   },

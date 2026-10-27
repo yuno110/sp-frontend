@@ -7,6 +7,7 @@ import { getMyProfile } from '@/features/member/api';
 import { logout } from '@/features/auth/api';
 import { errorOf, messageOf } from '@/lib/api/client';
 import { decodeClaims, secondsUntilExpiry } from '@/lib/jwt';
+import { DEV_ONLY } from '@/lib/devOnly';
 import { ApiLogPanel } from './ApiLogPanel';
 import { Button } from './ui';
 
@@ -14,7 +15,8 @@ const NAV = [
   { to: '/posts', label: '게시판' },
   { to: '/posts/mine', label: '내 글' },
   { to: '/me', label: '마이페이지' },
-  { to: '/tokens', label: '토큰 실험' },
+  // 라우트도 개발 빌드에서만 있다(router.tsx).
+  ...(DEV_ONLY ? [{ to: '/tokens', label: '토큰 실험' }] : []),
 ];
 
 /**
@@ -53,7 +55,6 @@ export function Layout() {
         <Link to="/posts" className="text-lg font-bold text-default">
           sp-frontend
         </Link>
-        <span className="text-xs text-faint">백엔드 확인용 화면</span>
 
         <nav className="ml-4 flex items-center gap-1">
           {NAV.map((item) => (
@@ -91,10 +92,12 @@ export function Layout() {
                 ) : (
                   <span className="font-medium text-default">{profile.data?.nickname ?? '…'}</span>
                 )}
-                <span className="ml-2 font-mono text-xs text-faint">
-                  sub {accountId} · {role}
-                  {expiresIn !== null ? ` · exp ${expiresIn}s` : ''}
-                </span>
+                {DEV_ONLY ? (
+                  <span className="ml-2 font-mono text-xs text-faint">
+                    sub {accountId} · {role}
+                    {expiresIn !== null ? ` · exp ${expiresIn}s` : ''}
+                  </span>
+                ) : null}
               </span>
               <Button onClick={doLogout}>
                 <LogOut size={13} /> 로그아웃
@@ -119,7 +122,7 @@ export function Layout() {
         </div>
       </main>
 
-      <ApiLogPanel />
+      {DEV_ONLY ? <ApiLogPanel /> : null}
     </div>
   );
 }

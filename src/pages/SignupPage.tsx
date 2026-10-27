@@ -5,6 +5,7 @@ import { clsx } from 'clsx';
 import { checkEmail, createAccount, login } from '@/features/auth/api';
 import { checkNickname, createProfile } from '@/features/member/api';
 import { errorOf, messageOf } from '@/lib/api/client';
+import { DEV_ONLY } from '@/lib/devOnly';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
 
@@ -170,10 +171,12 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
               void doProfile();
             }}
           >
-            <p className="text-xs text-muted">
-              member 가 받는 본문은 nickname 하나다. accountId 는 검증된 토큰의 sub
-              {accountId !== null ? ` (= ${accountId})` : ''} 에서 온다.
-            </p>
+            {DEV_ONLY ? (
+              <p className="text-xs text-muted">
+                member 가 받는 본문은 nickname 하나다. accountId 는 검증된 토큰의 sub
+                {accountId !== null ? ` (= ${accountId})` : ''} 에서 온다.
+              </p>
+            ) : null}
             <Field label="닉네임">
               <div className="flex gap-2">
                 <Input value={nickname} onChange={(e) => setNickname(e.target.value)} />

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { changePassword, getMyAccount, withdrawAccount } from '@/features/auth/api';
 import { getMyProfile, updateNickname, withdrawProfile } from '@/features/member/api';
 import { errorOf, messageOf } from '@/lib/api/client';
+import { DEV_ONLY } from '@/lib/devOnly';
 import { formatDateTime } from '@/lib/format';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
@@ -74,12 +75,14 @@ export function MyPage() {
                   {formatDateTime(account.data?.createdAt)}
                 </dd>
               </div>
-              <div className="flex gap-2">
-                <dt className="w-24 shrink-0 text-muted">sub / role</dt>
-                <dd className="font-mono text-xs text-default">
-                  {accountId} / {role}
-                </dd>
-              </div>
+              {DEV_ONLY ? (
+                <div className="flex gap-2">
+                  <dt className="w-24 shrink-0 text-muted">sub / role</dt>
+                  <dd className="font-mono text-xs text-default">
+                    {accountId} / {role}
+                  </dd>
+                </div>
+              ) : null}
             </dl>
           )}
           <p className="mt-2 text-xs text-faint">
@@ -125,10 +128,12 @@ export function MyPage() {
                   수정
                 </Button>
               </form>
-              <p className="mt-2 text-xs text-faint">
-                수정해도 토큰이 바뀌지 않는다 — claim 에 nickname 이 없다. 과거 글의 작성자 이름도
-                그대로다 (스냅샷, adr/0003).
-              </p>
+              {DEV_ONLY ? (
+                <p className="mt-2 text-xs text-faint">
+                  수정해도 토큰이 바뀌지 않는다 — claim 에 nickname 이 없다. 과거 글의 작성자 이름도
+                  그대로다 (스냅샷, adr/0003).
+                </p>
+              ) : null}
             </>
           )}
         </Panel>
@@ -163,10 +168,12 @@ export function MyPage() {
               PATCH /api/v1/accounts/me/password
             </Button>
           </form>
-          <p className="mt-2 text-xs text-faint">
-            RefreshToken 은 삭제되지만 이미 발급된 Access Token 은 만료까지 통과한다 (30분 +
-            스큐 60초, security.md §5.3).
-          </p>
+          {DEV_ONLY ? (
+            <p className="mt-2 text-xs text-faint">
+              RefreshToken 은 삭제되지만 이미 발급된 Access Token 은 만료까지 통과한다 (30분 +
+              스큐 60초, security.md §5.3).
+            </p>
+          ) : null}
         </Panel>
 
         <Panel title="탈퇴 — 2단계">

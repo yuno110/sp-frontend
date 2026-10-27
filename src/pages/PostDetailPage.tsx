@@ -12,6 +12,7 @@ import {
 } from '@/features/board/api';
 import { COMMENT_CONTENT_MAX } from '@/features/board/types';
 import { messageOf } from '@/lib/api/client';
+import { DEV_ONLY } from '@/lib/devOnly';
 import { formatDateTime } from '@/lib/format';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, Empty, ErrorBox, Panel, Textarea } from '@/components/ui';
@@ -120,8 +121,9 @@ export function PostDetailPage() {
               </Link>
               <span className="text-faint">
                 {' '}
-                · sub {post.data.writerId} · {formatDateTime(post.data.createdAt)} · 조회{' '}
-                {post.data.viewCount} · 댓글 {post.data.commentCount}
+                {DEV_ONLY ? `· sub ${post.data.writerId} ` : null}·{' '}
+                {formatDateTime(post.data.createdAt)} · 조회 {post.data.viewCount} · 댓글{' '}
+                {post.data.commentCount}
               </span>
             </p>
           </div>

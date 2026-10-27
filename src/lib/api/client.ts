@@ -3,6 +3,7 @@ import { baseUrlFor, serviceOf } from './services';
 import type { ApiResponse, ErrorResponse, TokenResponse } from './types';
 import { useAuthStore } from '@/stores/authStore';
 import { useApiLogStore } from '@/stores/apiLogStore';
+import { DEV_ONLY } from '@/lib/devOnly';
 
 /**
  * HTTP 클라이언트. 주소는 경로 접두어로 갈라진다(services.ts).
@@ -95,7 +96,9 @@ http.interceptors.request.use((config) => {
   return config;
 });
 
+/** 요청 기록을 남긴다. **프로덕션 빌드에서는 모으지 않는다** — 보여줄 패널이 없다(lib/devOnly.ts). */
 function log(config: AxiosRequestConfig | undefined, status: number | null, body: unknown, transportError: string | null) {
+  if (!DEV_ONLY) return;
   const path = config?.url ?? '';
   const started = (config as Retryable | undefined)?._startedAt;
   const error = (body as ApiResponse<unknown> | undefined)?.error ?? null;

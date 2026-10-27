@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import { login } from '@/features/auth/api';
 import { messageOf } from '@/lib/api/client';
+import { DEV_ONLY } from '@/lib/devOnly';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
 
@@ -58,8 +59,8 @@ export function LoginPage() {
           </Button>
         </form>
         <p className="mt-3 text-xs text-faint">
-          계정이 없으면 <Link to="/signup" className="text-accent-600 underline">가입</Link>. 가입은
-          계정 → 로그인 → 프로필 3단계다 (api-contract.md §9.1).
+          계정이 없으면 <Link to="/signup" className="text-accent-600 underline">가입</Link>.
+          {DEV_ONLY ? ' 가입은 계정 → 로그인 → 프로필 3단계다 (api-contract.md §9.1).' : null}
         </p>
       </Panel>
     </div>
