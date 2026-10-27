@@ -51,27 +51,70 @@ interface Retryable extends InternalAxiosRequestConfig {
 /** 재발급 경로. 이 경로의 401 은 복구 대상이 아니다 — 아래 인터셉터가 그렇게 가른다. */
 const REISSUE_PATH = '/api/v1/auth/reissue';
 
-let refreshing: Promise<string> | null = null;
-
 async function reissue(): Promise<string> {
   const { refreshToken, setTokens, clear } = useAuthStore.getState();
   if (!refreshToken) throw new Error('refreshToken 이 없다');
+  // 결과는 보낸 토큰이 아직 스토어의 값일 때만 반영한다. 그 사이 토큰이 바뀌었으면(예: 되살리는
+  // 창의 로그인) 늦게 끝난 이 재발급이 그것을 지우거나 덮지 않는다.
+  const unchanged = () => useAuthStore.getState().refreshToken === refreshToken;
+  let token: TokenResponse | null | undefined;
   try {
     const res = await reissueHttp.post<ApiResponse<TokenResponse>>(
       REISSUE_PATH,
       { refreshToken },
       { baseURL: baseUrlFor(REISSUE_PATH), headers: { 'Content-Type': 'application/json' } },
     );
-    const token = res.data.data;
-    if (!token?.accessToken) throw new Error('재발급 응답에 accessToken 이 없다');
-    // Refresh Token 도 회전 발급되므로 둘을 함께 저장한다 — accessToken 만 받으면
-    // 회전된 refreshToken 이 유실되고 두 번째 갱신부터 막힌다(api-contract.md §2.1).
-    setTokens(token);
-    return token.accessToken;
+    token = res.data?.data;
   } catch (e) {
-    clear();
+    // 토큰을 비우는 것은 서버의 거부(4xx)뿐이다 — 계약의 재발급 거부는 401 이다(api-contract.md §2.1·§8.1).
+    // 5xx 와 응답 없음(연결 거부·타임아웃)은 Refresh Token 을 그대로 두고 실패만 전한다. 새로고침이
+    // auth 를 거치므로, 지우면 auth 의 장애가 로그아웃이 된다.
+    const status = axios.isAxiosError(e) ? e.response?.status : undefined;
+    if (status !== undefined && status >= 400 && status < 500 && unchanged()) clear();
     throw e;
   }
+  if (!token?.accessToken) {
+    if (unchanged()) clear();
+    throw new Error('재발급 응답에 accessToken 이 없다');
+  }
+  // Refresh Token 도 회전 발급되므로 둘을 함께 저장한다 — accessToken 만 받으면
+  // 회전된 refreshToken 이 유실되고 두 번째 갱신부터 막힌다(api-contract.md §2.1).
+  if (unchanged()) setTokens(token);
+  return token.accessToken;
+}
+
+let refreshing: Promise<string> | null = null;
+
+/**
+ * Access Token 을 다시 받는다. **진행 중인 재발급이 있으면 새로 쏘지 않고 그것을 같이 기다린다.**
+ * 부트스트랩(`restoreSession`)과 401 복구가 이 한 자리를 탄다 — 같은 Refresh Token 으로 두 번
+ * 재발급하면 하나가 회전의 조건부 UPDATE 에 지고(api-contract.md §2.1), 그 실패가 먼저 도착하면
+ * 세션이 끝난다.
+ */
+function refreshAccessToken(): Promise<string> {
+  refreshing ??= reissue().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
+/**
+ * 새로고침 뒤 세션을 되살린다. Access Token 은 메모리에만 있으므로(stores/authStore.ts) 영속된
+ * Refresh Token 으로 다시 받는다.
+ *
+ * 되살리는 동안 여러 번 불려도 재발급은 한 번이다 — StrictMode 는 개발 중 효과를 두 번 실행한다.
+ * 끝난 뒤에 불리면 재발급하지 않는다. 끝나면 성공이든 실패든 `restoring` 을 내린다.
+ *
+ * 실패를 다시 던지지 않는다 — 판정은 스토어의 상태가 한다. 거부(4xx)면 `reissue()` 가 토큰을 비우고,
+ * 5xx·응답 없음이면 Refresh Token 을 남겨 다음 새로고침이 다시 묻는다. 결과는 이 재발급이 받은
+ * Access Token 이고, 실패했으면 null 이다.
+ */
+export function restoreSession(): Promise<string | null> {
+  const { restoring, accessToken } = useAuthStore.getState();
+  if (!restoring) return Promise.resolve(accessToken);
+  return refreshAccessToken()
+    .catch(() => null)
+    .finally(() => useAuthStore.setState({ restoring: false }));
 }
 
 http.interceptors.request.use((config) => {
@@ -140,16 +183,14 @@ http.interceptors.response.use(
       log(original, status, error.response?.data, null);
       original._logged = true;
       try {
-        refreshing = refreshing ?? reissue();
-        const fresh = await refreshing;
-        refreshing = null;
+        const fresh = await refreshAccessToken();
         original.headers.Authorization = `Bearer ${fresh}`;
         // 재시도는 같은 config 객체로 나간다. 표시를 지우지 않으면 **재시도가 실패해도
         // 그 실패가 기록되지 않는다** — 중복을 막으려다 새 구멍을 내는 자리다.
         original._logged = false;
         return http.request(original);
       } catch {
-        refreshing = null;
+        // 재발급이 실패했다. 원래의 401 을 아래에서 그대로 돌려준다.
       }
     }
 

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { cspPlugin } from './csp.ts';
 
 /**
  * 포트는 3000 이다. 세 서비스의 `cors.allowed-origins` 가 이미
@@ -11,7 +12,8 @@ import path from 'node:path';
  * 브라우저가 8081·8082·8083 을 직접 호출하므로 preflight 가 실제로 날아간다.
  */
 export default defineConfig({
-  plugins: [react()],
+  // CSP 는 프로덕션 빌드에만 넣는다(csp.ts).
+  plugins: [react(), cspPlugin()],
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },
   },

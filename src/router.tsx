@@ -17,9 +17,16 @@ import { useAuthStore } from '@/stores/authStore';
  * 토큰이 없으면 로그인으로 보낸다. **인가가 아니다** — 판정은 서버가 한다
  * (sp-docs/security.md §5.1). 화면 전환을 줄이는 편의일 뿐이고, 토큰을 들고 있어도
  * 서버가 401·403 을 낼 수 있다.
+ *
+ * **새로고침 뒤 세션을 되살리는 동안에는 판정하지 않는다** — 그리지도 로그인으로 보내지도 않는다.
+ * Access Token 은 메모리에만 있어 새로고침 직후에는 없으므로(stores/authStore.ts), 그때 판정하면 세션이
+ * 되살아나도 로그인 화면에 남는다. 그 창에 로그인해 Access Token 이 생겨도 되살리기가 끝날 때까지
+ * 그리지 않는다.
  */
 function RequireToken({ children }: { children: ReactNode }) {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const restoring = useAuthStore((s) => s.restoring);
+  if (restoring) return null;
   return accessToken ? children : <Navigate to="/login" replace />;
 }
 

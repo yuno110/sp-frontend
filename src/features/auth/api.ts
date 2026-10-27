@@ -37,7 +37,7 @@ export function reissue(refreshToken: string) {
   // 헤더가 붙으면 bearer 필터가 인가 평가보다 먼저 돌아 **만료된 Access Token 이
   // 재발급 핸들러에 닿기 전에 401 A003 을 만든다.** 그러면 Refresh Token 을 읽어 보지도
   // 못한 실패가 "Refresh Token 만료" 로 읽힌다 — 자동 경로(`lib/api/client.ts` 의
-  // `reissueHttp`)는 인터셉터가 없어 애초에 붙지 않는다.
+  // `reissueHttp`)는 토큰을 주입하는 인터셉터가 없어 애초에 붙지 않는다.
   return unwrap(
     http.post<ApiResponse<TokenResponse>>(
       '/api/v1/auth/reissue',
