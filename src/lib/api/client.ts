@@ -1,6 +1,7 @@
 import axios, { AxiosError, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
 import { baseUrlFor, serviceOf } from './services';
-import type { ApiResponse, ErrorResponse, TokenResponse } from './types';
+import type { ApiResponse, ErrorResponse, FieldError, TokenResponse } from './types';
+import { ERROR_SENTENCES, NO_RESPONSE, UNEXPECTED, type Meanings, type Recovery } from './errorCodes';
 import { useAuthStore } from '@/stores/authStore';
 import { useApiLogStore } from '@/stores/apiLogStore';
 import { DEV_ONLY } from '@/lib/devOnly';
@@ -113,7 +114,12 @@ export function restoreSession(): Promise<string | null> {
   const { restoring, accessToken } = useAuthStore.getState();
   if (!restoring) return Promise.resolve(accessToken);
   return refreshAccessToken()
-    .catch(() => null)
+    .catch((e: unknown) => {
+      // 되살리지 못한 이유를 남긴다 — 보호된 경로는 로그인으로 가고 로그인 화면이 그 이유를 보인다(stores/authStore.ts 의
+      // `sessionFailure`). 그 사이 로그인했으면(되살리는 창의 로그인) 끝난 세션이 없으므로 남기지 않는다.
+      if (useAuthStore.getState().accessToken === null) useAuthStore.getState().setSessionFailure(e);
+      return null;
+    })
     .finally(() => useAuthStore.setState({ restoring: false }));
 }
 
@@ -182,6 +188,8 @@ http.interceptors.response.use(
       // 세 서비스가 엮이는 자리가 패널에서 사라진다.
       log(original, status, error.response?.data, null);
       original._logged = true;
+      // 복구를 시작할 때 Refresh Token 이 없으면 이어 갈 세션이 없다 — 그 사이 로그아웃했다. 아래에서 이유를 남기지 않는다.
+      const hadSession = useAuthStore.getState().refreshToken !== null;
       try {
         const fresh = await refreshAccessToken();
         original.headers.Authorization = `Bearer ${fresh}`;
@@ -191,6 +199,13 @@ http.interceptors.response.use(
         return http.request(original);
       } catch {
         // 재발급이 실패했다. 원래의 401 을 아래에서 그대로 돌려준다.
+        //
+        // 복구를 시작할 때 세션이 있었고 재발급 뒤 Access Token 이 비었으면(비울지는 reissue() 가 정한다) 이 401 을
+        // 남긴다. 보호된 화면은 곧 로그인으로 가며 이 오류를 잃으므로 로그인 화면이 이어 보인다(stores/authStore.ts 의
+        // `sessionFailure`).
+        if (hadSession && useAuthStore.getState().accessToken === null) {
+          useAuthStore.getState().setSessionFailure(error);
+        }
       }
     }
 
@@ -217,14 +232,54 @@ export function errorOf(e: unknown): ErrorResponse | null {
   return null;
 }
 
-/** 화면에 띄울 한 줄. 서버 메시지를 다시 쓰지 않는다. */
-export function messageOf(e: unknown): string {
+/** 화면에 보여줄 오류. 그리는 것은 components/ui.tsx 의 `ErrorBox`·`ErrorLine` 이다. */
+export interface ErrorView {
+  /** 사용자에게 보여줄 문장. */
+  text: string;
+  /** 보조 정보로 남기는 식별자 — 서버의 코드이고, 오류 본문이 없는 응답이면 HTTP 상태다. 응답이 없거나 화면 쪽 예외면 null. */
+  code: string | null;
+  recovery: Recovery | null;
+  fieldErrors: FieldError[];
+  /** 오류 응답의 모양이 아닌 실패의 원문. 사용자에게 보여줄 문장이 아니라서 개발 빌드에서만 그린다. */
+  detail: string | null;
+}
+
+/**
+ * 서버의 `message` 대신 코드마다 정한 문장을 쓴다(errorCodes.ts). **코드와 `fieldErrors` 는 버리지 않는다** —
+ * 문장을 다듬어도 코드가 남아야 무엇이 났는지 알 수 있다(AGENTS.md 불변식 9). 사전에 없는 코드는 서버
+ * 메시지를 그대로 쓴다.
+ *
+ * 같은 코드가 엔드포인트마다 다른 뜻이면 그 엔드포인트를 부른 쪽이 `meanings` 를 넘긴다(errorCodes.ts 의
+ * `MY_PROFILE`). 넘기지 않으면 기본 뜻이다.
+ */
+export function describeError(e: unknown, meanings: Meanings = {}): ErrorView {
   const error = errorOf(e);
-  if (error) return `${error.code} ${error.message}`;
-  if (axios.isAxiosError(e) && !e.response) {
-    return `응답이 없다 (${e.message}) — 서비스가 떠 있는지, CORS 오리진이 맞는지 본다`;
+  if (error) {
+    const known = meanings[error.code] ?? ERROR_SENTENCES[error.code];
+    return {
+      text: known ? known.text : error.message,
+      code: error.code,
+      recovery: known?.recovery ?? null,
+      fieldErrors: error.fieldErrors ?? [],
+      detail: null,
+    };
   }
-  return e instanceof Error ? e.message : String(e);
+  if (axios.isAxiosError(e)) {
+    if (!e.response) return { text: NO_RESPONSE, code: null, recovery: null, fieldErrors: [], detail: null };
+    return { text: UNEXPECTED, code: `HTTP ${e.response.status}`, recovery: null, fieldErrors: [], detail: e.message };
+  }
+  return {
+    text: UNEXPECTED,
+    code: null,
+    recovery: null,
+    fieldErrors: [],
+    detail: e instanceof Error ? e.message : String(e),
+  };
+}
+
+/** 한 필드의 오류 메시지들. 입력칸 옆에 그린다 — 요약에서 그 필드를 빼는 것은 `ErrorBox` 의 `inlineFields` 다. */
+export function fieldMessages(e: unknown, field: string): string[] {
+  return (errorOf(e)?.fieldErrors ?? []).filter((f) => f.field === field).map((f) => f.message);
 }
 
 /** `ApiResponse` 를 벗긴다. `success=false` 가 2xx 로 오는 경우는 계약에 없다. */

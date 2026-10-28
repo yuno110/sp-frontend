@@ -1,7 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getProfile } from '@/features/member/api';
-import { messageOf } from '@/lib/api/client';
 import { formatDateTime } from '@/lib/format';
 import { Empty, ErrorBox, Panel } from '@/components/ui';
 
@@ -27,11 +26,12 @@ export function MemberProfilePage() {
 
   return (
     <div className="mx-auto max-w-md space-y-3">
-      <Panel title={`프로필 — accountId ${accountId}`}>
+      <Panel title="회원 프로필">
         {query.isLoading ? (
           <Empty>불러오는 중…</Empty>
         ) : query.isError ? (
-          <ErrorBox message={messageOf(query.error)} />
+          // 이 조회의 M001 은 그 회원의 프로필이 없다는 뜻이다 — 내 프로필 등록으로 안내하지 않는다(기본 뜻).
+          <ErrorBox error={query.error} />
         ) : query.data ? (
           <dl className="space-y-1.5 text-sm">
             <div className="flex gap-2">
@@ -49,15 +49,11 @@ export function MemberProfilePage() {
             <div className="flex gap-2">
               <dt className="w-24 shrink-0 text-muted">탈퇴</dt>
               <dd className={query.data.deleted ? 'text-danger-600' : 'text-default'}>
-                {query.data.deleted ? 'true — 탈퇴한 회원' : 'false'}
+                {query.data.deleted ? '탈퇴한 회원' : '아니오'}
               </dd>
             </div>
           </dl>
         ) : null}
-        <p className="mt-3 text-xs text-faint">
-          이 가입일은 member.created_at(프로필 등록 시각)이다. 마이페이지의 계정 생성 시각과 다른
-          값이다 — 가입이 3단계이므로 사이에 로그인이 끼었다.
-        </p>
       </Panel>
       <Link to="/posts" className="block text-sm text-accent-600 underline">
         목록으로

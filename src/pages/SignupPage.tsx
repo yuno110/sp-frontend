@@ -4,7 +4,7 @@ import { Check } from 'lucide-react';
 import { clsx } from 'clsx';
 import { checkEmail, createAccount, login } from '@/features/auth/api';
 import { checkNickname, createProfile } from '@/features/member/api';
-import { errorOf, messageOf } from '@/lib/api/client';
+import { fieldMessages } from '@/lib/api/client';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
@@ -18,7 +18,10 @@ import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
  *
  * **1단계만 끝난 상태도 정상이다** — 로그인·탈퇴는 되고 글 작성만 `S002` 로 막힌다.
  */
-const STEPS = ['계정 생성 (auth)', '로그인 (auth)', '프로필 등록 (member)'];
+const STEPS = ['계정 만들기', '로그인', '프로필 등록'];
+
+/** 단계마다 입력칸 옆에 오류를 그리는 필드. 나머지 필드의 오류는 그 단계의 요약에 남는다. */
+const INLINE_FIELDS: string[][] = [['email', 'password'], [], ['nickname']];
 
 export function SignupPage({ startAt = 0 }: { startAt?: number }) {
   const navigate = useNavigate();
@@ -29,10 +32,8 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [nickname, setNickname] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [fields, setFields] = useState<string[]>([]);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [createdId, setCreatedId] = useState<number | null>(null);
   const [checked, setChecked] = useState<string | null>(null);
 
   /**
@@ -46,21 +47,18 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
     run(async () => {
       setChecked(null);
       const { available } = await fn();
-      setChecked(`${what}: ${available ? 'available true — 쓸 수 있다' : 'available false — 이미 쓰이고 있다'}`);
+      setChecked(available ? `쓸 수 있는 ${what}이다` : `이미 쓰이고 있는 ${what}이다`);
     });
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(null);
-    setFields([]);
     try {
       await fn();
     } catch (e) {
-      // 1단계의 힌트가 "규칙 위반은 400 C001 로 돌아온다" 고 적는다. 그 C001 의 본체는
-      // fieldErrors 이고(requirements/member.md §2 의 필드별 메시지), 그것을 버리면
-      // 화면이 "잘못된 입력값입니다" 한 줄만 남아 무엇이 틀렸는지 알 수 없다.
-      setError(messageOf(e));
-      setFields((errorOf(e)?.fieldErrors ?? []).map((f) => `${f.field}: ${f.message}`));
+      // 규칙 위반은 C001 이고 그 본체는 fieldErrors 다(requirements/member.md §2 의 필드별 메시지). 버리면
+      // 오류 문장 한 줄만 남아 무엇이 틀렸는지 알 수 없다 — 입력칸 옆과 요약에 나눠 그린다.
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -68,8 +66,7 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
 
   const doAccount = () =>
     run(async () => {
-      const created = await createAccount(email, password);
-      setCreatedId(created.accountId);
+      await createAccount(email, password);
       setStep(1);
     });
 
@@ -111,7 +108,7 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
               void doAccount();
             }}
           >
-            <Field label="이메일">
+            <Field label="이메일" errors={fieldMessages(error, 'email')}>
               <div className="flex gap-2">
                 <Input value={email} onChange={(e) => setEmail(e.target.value)} />
                 <Button
@@ -123,17 +120,17 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
                 </Button>
               </div>
             </Field>
-            <Field label="비밀번호" hint="규칙 위반은 400 C001 로 돌아온다 — 서버가 판정한다">
+            <Field label="비밀번호" errors={fieldMessages(error, 'password')}>
               <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
             {checked ? (
-              <div className="rounded-md border border-line bg-subtle px-3 py-2 font-mono text-xs text-default">
+              <div className="rounded-md border border-line bg-subtle px-3 py-2 text-xs text-default">
                 {checked}
               </div>
             ) : null}
-            <ErrorBox message={error} fields={fields} />
+            <ErrorBox error={error} inlineFields={INLINE_FIELDS[0]} />
             <Button type="submit" variant="primary" disabled={busy} className="w-full justify-center">
-              {busy ? '보내는 중…' : 'POST /api/v1/accounts'}
+              {busy ? '보내는 중…' : '계정 만들기'}
             </Button>
           </form>
         </Panel>
@@ -142,22 +139,21 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
       {step === 1 ? (
         <Panel title="2단계 — 로그인">
           <p className="mb-3 text-xs text-muted">
-            {createdId !== null ? `accountId ${createdId} 로 계정이 만들어졌다. ` : null}
-            토큰을 받아야 3단계를 호출할 수 있다.
+            계정이 만들어졌다. 로그인하면 프로필을 등록할 수 있다.
           </p>
           {checked ? (
-              <div className="rounded-md border border-line bg-subtle px-3 py-2 font-mono text-xs text-default">
+              <div className="rounded-md border border-line bg-subtle px-3 py-2 text-xs text-default">
                 {checked}
               </div>
             ) : null}
-            <ErrorBox message={error} fields={fields} />
+            <ErrorBox error={error} inlineFields={INLINE_FIELDS[1]} />
           <Button
             variant="primary"
             disabled={busy}
             onClick={() => void doLogin()}
             className="mt-2 w-full justify-center"
           >
-            {busy ? '보내는 중…' : 'POST /api/v1/auth/login'}
+            {busy ? '보내는 중…' : '로그인'}
           </Button>
         </Panel>
       ) : null}
@@ -177,7 +173,7 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
                 {accountId !== null ? ` (= ${accountId})` : ''} 에서 온다.
               </p>
             ) : null}
-            <Field label="닉네임">
+            <Field label="닉네임" errors={fieldMessages(error, 'nickname')}>
               <div className="flex gap-2">
                 <Input value={nickname} onChange={(e) => setNickname(e.target.value)} />
                 <Button
@@ -190,17 +186,17 @@ export function SignupPage({ startAt = 0 }: { startAt?: number }) {
               </div>
             </Field>
             {checked ? (
-              <div className="rounded-md border border-line bg-subtle px-3 py-2 font-mono text-xs text-default">
+              <div className="rounded-md border border-line bg-subtle px-3 py-2 text-xs text-default">
                 {checked}
               </div>
             ) : null}
-            <ErrorBox message={error} fields={fields} />
+            <ErrorBox error={error} inlineFields={INLINE_FIELDS[2]} />
             <Button type="submit" variant="primary" disabled={busy} className="w-full justify-center">
-              {busy ? '보내는 중…' : 'POST /api/v1/members'}
+              {busy ? '보내는 중…' : '프로필 등록'}
             </Button>
           </form>
           <p className="mt-3 text-xs text-faint">
-            건너뛰어도 된다 — 글 작성만 403 S002 로 막히고 나머지는 동작한다.
+            나중에 등록해도 된다 — 프로필이 없으면 글과 댓글만 쓸 수 없다.
           </p>
         </Panel>
       ) : null}

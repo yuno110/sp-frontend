@@ -30,7 +30,7 @@ export function PostTable({ items }: { items: PostListItem[] }) {
               <Link
                 to={`/members/${item.writerId}`}
                 className="text-muted hover:text-accent-600"
-                title={`accountId ${item.writerId} — 스냅샷된 닉네임이다`}
+                title="작성 당시의 닉네임"
               >
                 {item.writerNickname}
               </Link>

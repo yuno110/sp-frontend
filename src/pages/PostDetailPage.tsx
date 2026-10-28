@@ -11,14 +11,26 @@ import {
   updateComment,
 } from '@/features/board/api';
 import { COMMENT_CONTENT_MAX } from '@/features/board/types';
-import { messageOf } from '@/lib/api/client';
+import { fieldMessages } from '@/lib/api/client';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { formatDateTime } from '@/lib/format';
 import { useAuthStore } from '@/stores/authStore';
-import { Button, Empty, ErrorBox, Panel, Textarea } from '@/components/ui';
+import { Button, Empty, ErrorBox, FieldErrors, Panel, Textarea } from '@/components/ui';
 import { Pager } from '@/components/Pager';
 
 const COMMENT_SIZE = 20;
+
+/** 댓글 작성란·수정란이 옆에 오류를 그리는 필드. */
+const COMMENT_FIELDS = ['content'];
+
+/**
+ * 마지막 실패. 어느 동작의 실패냐에 따라 그리는 자리가 갈린다 — 작성은 작성란 위, 나머지는 댓글 목록 위다.
+ * 어느 동작이든 성공하면 비운다.
+ */
+type Failure =
+  | { action: 'add'; error: unknown }
+  | { action: 'save'; error: unknown; commentId: number }
+  | { action: 'remove'; error: unknown };
 
 /**
  * 게시글 상세 + 댓글. 조회는 무인증이다 (api-contract.md §4.2).
@@ -39,7 +51,7 @@ export function PostDetailPage() {
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
 
   const post = useQuery({
     queryKey: ['post', postId],
@@ -62,42 +74,42 @@ export function PostDetailPage() {
     mutationFn: () => createComment(postId, draft),
     onSuccess: () => {
       setDraft('');
-      setError(null);
+      setFailure(null);
       refresh();
     },
-    onError: (e) => setError(messageOf(e)),
+    onError: (error) => setFailure({ action: 'add', error }),
   });
 
   const saveComment = useMutation({
     mutationFn: (commentId: number) => updateComment(commentId, editDraft),
     onSuccess: () => {
       setEditing(null);
-      setError(null);
+      setFailure(null);
       refresh();
     },
-    onError: (e) => setError(messageOf(e)),
+    onError: (error, commentId) => setFailure({ action: 'save', error, commentId }),
   });
 
   const removeComment = useMutation({
     mutationFn: (commentId: number) => deleteComment(commentId),
     onSuccess: () => {
-      setError(null);
+      setFailure(null);
       refresh();
     },
-    onError: (e) => setError(messageOf(e)),
+    onError: (error) => setFailure({ action: 'remove', error }),
   });
 
   const removePost = useMutation({
     mutationFn: () => deletePost(postId),
     onSuccess: () => navigate('/posts'),
-    onError: (e) => setError(messageOf(e)),
+    onError: (error) => setFailure({ action: 'remove', error }),
   });
 
   if (post.isLoading) return <Empty>불러오는 중…</Empty>;
   if (post.isError) {
     return (
       <div className="space-y-3">
-        <ErrorBox message={messageOf(post.error)} />
+        <ErrorBox error={post.error} />
         <Link to="/posts" className="text-sm text-accent-600 underline">
           목록으로
         </Link>
@@ -108,6 +120,11 @@ export function PostDetailPage() {
 
   const mine = accountId !== null && accountId === post.data.writerId;
   const admin = role === 'ADMIN';
+  /** 수정에 실패한 댓글의 수정란이 지금 그려져 있는가. 아니면 그 필드 오류는 목록 위 요약에 남는다. */
+  const savingShown =
+    failure?.action === 'save' &&
+    editing === failure.commentId &&
+    (comments.data?.content.some((c) => c.id === failure.commentId) ?? false);
 
   return (
     <div className="space-y-4">
@@ -135,7 +152,7 @@ export function PostDetailPage() {
             ) : null}
             {mine || admin ? (
               <Button variant="danger" onClick={() => removePost.mutate()}>
-                <Trash2 size={13} /> 삭제{admin && !mine ? ' (ADMIN)' : ''}
+                <Trash2 size={13} /> 삭제{admin && !mine ? ' (관리자)' : ''}
               </Button>
             ) : null}
           </div>
@@ -146,9 +163,12 @@ export function PostDetailPage() {
       </Panel>
 
       <Panel title={`댓글 ${comments.data ? comments.data.totalElements : ''}`}>
-        <ErrorBox message={error} />
+        <ErrorBox
+          error={failure && failure.action !== 'add' ? failure.error : null}
+          inlineFields={savingShown ? COMMENT_FIELDS : []}
+        />
 
-        {comments.isError ? <ErrorBox message={messageOf(comments.error)} /> : null}
+        {comments.isError ? <ErrorBox error={comments.error} /> : null}
 
         {comments.data && comments.data.content.length > 0 ? (
           <ul className="divide-y divide-[var(--color-line-soft)]">
@@ -173,6 +193,13 @@ export function PostDetailPage() {
                         value={editDraft}
                         maxLength={COMMENT_CONTENT_MAX}
                         onChange={(e) => setEditDraft(e.target.value)}
+                      />
+                      <FieldErrors
+                        messages={
+                          failure?.action === 'save' && failure.commentId === c.id
+                            ? fieldMessages(failure.error, 'content')
+                            : []
+                        }
                       />
                       <div className="flex gap-1.5">
                         <Button variant="primary" onClick={() => saveComment.mutate(c.id)}>
@@ -223,38 +250,49 @@ export function PostDetailPage() {
           </div>
         ) : null}
 
-        {loggedIn ? (
-          <form
-            className="mt-4 space-y-2 border-t border-line-soft pt-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              addComment.mutate();
-            }}
-          >
-            <Textarea
-              rows={3}
-              value={draft}
-              maxLength={COMMENT_CONTENT_MAX}
-              placeholder={`댓글 (최대 ${COMMENT_CONTENT_MAX}자)`}
-              onChange={(e) => setDraft(e.target.value)}
-            />
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-faint">
-                {draft.length} / {COMMENT_CONTENT_MAX} · 작성에는 프로필이 필요하다 (없으면 403 S002)
-              </span>
-              <Button type="submit" variant="primary" disabled={addComment.isPending}>
-                등록
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <p className="mt-4 border-t border-line-soft pt-4 text-xs text-faint">
-            댓글을 쓰려면{' '}
-            <Link to="/login" className="text-accent-600 underline">
-              로그인
-            </Link>
-          </p>
-        )}
+        <div className="mt-4 space-y-2 border-t border-line-soft pt-4">
+          {/* 작성 실패는 작성란 밖에 둔다 — 실패가 세션을 끝내면(A003 뒤 재발급 거부) 작성란이 사라지는데,
+              그때도 무엇이 났고 어디로 가면 되는지는 남아야 한다. */}
+          <ErrorBox
+            error={failure?.action === 'add' ? failure.error : null}
+            inlineFields={loggedIn ? COMMENT_FIELDS : []}
+          />
+          {loggedIn ? (
+            <form
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                addComment.mutate();
+              }}
+            >
+              <Textarea
+                rows={3}
+                value={draft}
+                maxLength={COMMENT_CONTENT_MAX}
+                placeholder={`댓글 (최대 ${COMMENT_CONTENT_MAX}자)`}
+                onChange={(e) => setDraft(e.target.value)}
+              />
+              <FieldErrors
+                messages={failure?.action === 'add' ? fieldMessages(failure.error, 'content') : []}
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-faint">
+                  {draft.length} / {COMMENT_CONTENT_MAX} · 작성에는 프로필이 필요하다
+                </span>
+                <Button type="submit" variant="primary" disabled={addComment.isPending}>
+                  등록
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <p className="text-xs text-faint">
+              댓글을 쓰려면{' '}
+              <Link to="/login" className="text-accent-600 underline">
+                로그인
+              </Link>
+            </p>
+          )}
+        </div>
       </Panel>
     </div>
   );

@@ -1,15 +1,15 @@
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { LogOut } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { getMyProfile } from '@/features/member/api';
 import { logout } from '@/features/auth/api';
-import { errorOf, messageOf } from '@/lib/api/client';
+import { MY_PROFILE } from '@/lib/api/errorCodes';
 import { decodeClaims, secondsUntilExpiry } from '@/lib/jwt';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { ApiLogPanel } from './ApiLogPanel';
-import { Button } from './ui';
+import { Button, ErrorLine } from './ui';
 
 const NAV = [
   { to: '/posts', label: '게시판' },
@@ -37,7 +37,6 @@ export function Layout() {
   const { accessToken, accountId, role, clear } = useAuthStore();
   const loggedIn = accessToken !== null;
   const profile = useNickname(loggedIn);
-  const noProfile = errorOf(profile.error)?.code === 'M001';
   const expiresIn = secondsUntilExpiry(decodeClaims(accessToken));
 
   const doLogout = async () => {
@@ -52,9 +51,8 @@ export function Layout() {
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-4 border-b border-line bg-elev px-6 py-3">
-        <Link to="/posts" className="text-lg font-bold text-default">
-          sp-frontend
-        </Link>
+        {/* 제품 이름. 링크로 두지 않는다 — 탐색의 「게시판」 링크와 글자도 가는 곳(/posts)도 같아 같은 링크가 둘이 된다. */}
+        <span className="text-lg font-bold text-default">게시판</span>
 
         <nav className="ml-4 flex items-center gap-1">
           {NAV.map((item) => (
@@ -78,17 +76,11 @@ export function Layout() {
           {loggedIn ? (
             <>
               <span className="text-muted">
-                {noProfile ? (
-                  <Link to="/signup/profile" className="text-danger-600 underline">
-                    프로필 없음 — 가입 3단계 필요
-                  </Link>
-                ) : profile.isError ? (
-                  // M001 이 아닌 실패는 점 세 개로 덮지 않는다. member 를 내려 보는 것이
-                  // 이 화면으로 보려는 것 중 하나인데, 머리글이 로딩처럼 보이면 그 장애가
-                  // 가려진다 (AGENTS.md 불변식 9).
-                  <span className="font-medium text-danger-600" title={messageOf(profile.error)}>
-                    닉네임을 못 받았다 — {messageOf(profile.error)}
-                  </span>
+                {profile.isError ? (
+                  // 실패를 점 세 개로 덮지 않는다 — 머리글이 로딩처럼 보이면 member 의 장애가 가려진다
+                  // (AGENTS.md 불변식 9). 이 조회의 M001 은 "프로필이 아직 없음" 이라 프로필 등록으로
+                  // 안내한다(MY_PROFILE).
+                  <ErrorLine error={profile.error} meanings={MY_PROFILE} />
                 ) : (
                   <span className="font-medium text-default">{profile.data?.nickname ?? '…'}</span>
                 )}

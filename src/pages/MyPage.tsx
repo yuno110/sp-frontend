@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { changePassword, getMyAccount, withdrawAccount } from '@/features/auth/api';
 import { getMyProfile, updateNickname, withdrawProfile } from '@/features/member/api';
-import { errorOf, messageOf } from '@/lib/api/client';
+import { fieldMessages } from '@/lib/api/client';
+import { MY_PROFILE } from '@/lib/api/errorCodes';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { formatDateTime } from '@/lib/format';
 import { useAuthStore } from '@/stores/authStore';
@@ -28,23 +29,21 @@ export function MyPage() {
   const [newPassword, setNewPassword] = useState('');
   const [withdrawPassword, setWithdrawPassword] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [fields, setFields] = useState<string[]>([]);
+  const [error, setError] = useState<unknown>(null);
 
   const account = useQuery({ queryKey: ['account', 'me'], queryFn: getMyAccount, retry: false });
   const profile = useQuery({ queryKey: ['member', 'me'], queryFn: getMyProfile, retry: false });
-  const noProfile = errorOf(profile.error)?.code === 'M001';
+  // 입력칸 옆에 오류를 그리는 필드 — 닉네임 입력칸은 프로필 조회가 실패하면 그려지지 않는다.
+  const inlineFields = ['currentPassword', 'newPassword', 'password', ...(profile.isError ? [] : ['nickname'])];
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     setError(null);
-    setFields([]);
     setNotice(null);
     try {
       await fn();
       setNotice(`${label} 완료`);
     } catch (e) {
-      setError(messageOf(e));
-      setFields((errorOf(e)?.fieldErrors ?? []).map((f) => `${f.field}: ${f.message}`));
+      setError(e);
     }
   };
 
@@ -57,12 +56,12 @@ export function MyPage() {
           {notice}
         </div>
       ) : null}
-      <ErrorBox message={error} fields={fields} />
+      <ErrorBox error={error} inlineFields={inlineFields} />
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Panel title="계정 — auth">
+        <Panel title="계정">
           {account.isError ? (
-            <ErrorBox message={messageOf(account.error)} />
+            <ErrorBox error={account.error} />
           ) : (
             <dl className="space-y-1.5 text-sm">
               <div className="flex gap-2">
@@ -85,21 +84,12 @@ export function MyPage() {
               ) : null}
             </dl>
           )}
-          <p className="mt-2 text-xs text-faint">
-            이 응답에는 accountId 와 nickname 이 없다 — auth 가 소유하지 않는 값이다.
-          </p>
         </Panel>
 
-        <Panel title="프로필 — member">
-          {noProfile ? (
-            <div className="space-y-2 text-sm">
-              <p className="text-danger-600">M001 — 프로필이 없다. 오류가 아니라 가입 3단계 미완료다.</p>
-              <Link to="/signup/profile" className="text-accent-600 underline">
-                프로필 등록하러 가기
-              </Link>
-            </div>
-          ) : profile.isError ? (
-            <ErrorBox message={messageOf(profile.error)} />
+        <Panel title="프로필">
+          {profile.isError ? (
+            // 이 조회의 M001 은 "프로필이 아직 없음" 이다 — 프로필 등록으로 안내한다(MY_PROFILE).
+            <ErrorBox error={profile.error} meanings={MY_PROFILE} />
           ) : (
             <>
               <dl className="space-y-1.5 text-sm">
@@ -120,7 +110,7 @@ export function MyPage() {
                 }}
               >
                 <div className="flex-1">
-                  <Field label="새 닉네임">
+                  <Field label="새 닉네임" errors={fieldMessages(error, 'nickname')}>
                     <Input value={nickname} onChange={(e) => setNickname(e.target.value)} />
                   </Field>
                 </div>
@@ -138,7 +128,7 @@ export function MyPage() {
           )}
         </Panel>
 
-        <Panel title="비밀번호 변경 — auth">
+        <Panel title="비밀번호 변경">
           <form
             className="space-y-3"
             onSubmit={(e) => {
@@ -150,14 +140,14 @@ export function MyPage() {
               });
             }}
           >
-            <Field label="현재 비밀번호">
+            <Field label="현재 비밀번호" errors={fieldMessages(error, 'currentPassword')}>
               <Input
                 type="password"
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
               />
             </Field>
-            <Field label="새 비밀번호" hint="규칙 위반은 400 C001, fieldErrors 에 newPassword">
+            <Field label="새 비밀번호" errors={fieldMessages(error, 'newPassword')}>
               <Input
                 type="password"
                 value={newPassword}
@@ -165,7 +155,7 @@ export function MyPage() {
               />
             </Field>
             <Button type="submit" variant="primary">
-              PATCH /api/v1/accounts/me/password
+              비밀번호 변경
             </Button>
           </form>
           {DEV_ONLY ? (
@@ -176,7 +166,7 @@ export function MyPage() {
           ) : null}
         </Panel>
 
-        <Panel title="탈퇴 — 2단계">
+        <Panel title="탈퇴">
           <form
             className="space-y-3"
             onSubmit={(e) => {
@@ -187,7 +177,11 @@ export function MyPage() {
               });
             }}
           >
-            <Field label="현재 비밀번호" hint="1단계는 비밀번호를 재확인한다">
+            <Field
+              label="현재 비밀번호"
+              hint="1단계는 비밀번호를 재확인한다"
+              errors={fieldMessages(error, 'password')}
+            >
               <Input
                 type="password"
                 value={withdrawPassword}
@@ -195,7 +189,7 @@ export function MyPage() {
               />
             </Field>
             <Button type="submit" variant="danger">
-              1단계 — DELETE /api/v1/accounts/me
+              1단계 — 계정 탈퇴
             </Button>
           </form>
           <div className="mt-3 border-t border-line-soft pt-3">
@@ -207,10 +201,10 @@ export function MyPage() {
                 })
               }
             >
-              2단계 — DELETE /api/v1/members/me
+              2단계 — 프로필 탈퇴
             </Button>
             <p className="mt-2 text-xs text-faint">
-              2단계는 1단계에서 쓰던 Access Token 으로 호출한다. 멱등이라 두 번 눌러도 204 다.
+              1단계를 마친 뒤 이 화면에서 이어서 누른다. 여러 번 눌러도 된다.
             </p>
           </div>
           <div className="mt-3 border-t border-line-soft pt-3">
@@ -220,7 +214,7 @@ export function MyPage() {
                 navigate('/login');
               }}
             >
-              토큰 비우기 (로컬만)
+              이 탭에서만 로그아웃
             </Button>
           </div>
         </Panel>

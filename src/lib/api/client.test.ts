@@ -1,5 +1,7 @@
+import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import http from './client';
+import http, { describeError, fieldMessages } from './client';
+import { ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE, UNEXPECTED } from './errorCodes';
 import { reissue } from '@/features/auth/api';
 import { listPosts } from '@/features/board/api';
 import { useAuthStore } from '@/stores/authStore';
@@ -68,5 +70,90 @@ describe('Authorization 헤더', () => {
     await http.get('/api/v1/posts', { headers: { Authorization: null as unknown as string } });
     await http.get('/api/v1/posts', { headers: { Authorization: 'Bearer not!a!token' } });
     expect(seen.map((s) => s.auth)).toEqual([null, 'Bearer not!a!token']);
+  });
+});
+
+/**
+ * 화면에 보여줄 오류 (sp-docs/plan/phase2.md §7.2 F-03). 문장은 사용자 말로 바꾸되 **코드와 `fieldErrors` 는
+ * 버리지 않는다** — 불변식 9의 "다듬는 것과 버리는 것은 다르다" 다.
+ */
+describe('describeError', () => {
+  const config = { headers: {} } as InternalAxiosRequestConfig;
+  const respond = (status: number, data: unknown) =>
+    new AxiosError(`status ${status}`, AxiosError.ERR_BAD_REQUEST, config, null, {
+      data,
+      status,
+      statusText: '',
+      headers: {},
+      config,
+    } as AxiosResponse);
+  const apiError = (status: number, code: string, message: string, fieldErrors: unknown[] = []) =>
+    respond(status, { success: false, data: null, error: { code, message, fieldErrors } });
+
+  it('사전에 있는 코드 — 사전의 문장과 복구 동작, 그리고 서버의 코드와 fieldErrors', () => {
+    const fieldErrors = [{ field: 'title', message: '제목은 1~200자여야 합니다.' }];
+    expect(describeError(apiError(400, 'C001', '잘못된 입력값입니다.', fieldErrors))).toEqual({
+      text: ERROR_SENTENCES.C001.text,
+      code: 'C001',
+      recovery: null,
+      fieldErrors,
+      detail: null,
+    });
+    expect(describeError(apiError(401, 'A003', '만료된 토큰입니다.'))).toMatchObject({
+      code: 'A003',
+      recovery: 'login',
+    });
+  });
+
+  it('엔드포인트별 뜻을 넘기면 그 뜻을 따르고, 넘기지 않으면 기본 뜻이다', () => {
+    const e = apiError(404, 'M001', '프로필을 찾을 수 없습니다.');
+    expect(describeError(e, MY_PROFILE)).toMatchObject({ text: MY_PROFILE.M001.text, recovery: 'profile', code: 'M001' });
+    expect(describeError(e)).toMatchObject({ text: ERROR_SENTENCES.M001.text, recovery: null, code: 'M001' });
+  });
+
+  it('사전에 없는 코드 — 서버 메시지와 코드를 그대로 쓴다', () => {
+    expect(describeError(apiError(400, 'X999', '새로 생긴 오류입니다.'))).toMatchObject({
+      text: '새로 생긴 오류입니다.',
+      code: 'X999',
+      recovery: null,
+    });
+  });
+
+  it('응답이 없다 — 연결 실패 문장이고 코드가 없다', () => {
+    expect(describeError(new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, {}))).toEqual({
+      text: NO_RESPONSE,
+      code: null,
+      recovery: null,
+      fieldErrors: [],
+      detail: null,
+    });
+  });
+
+  it('오류 본문이 없는 응답 — HTTP 상태를 코드 자리에 남긴다', () => {
+    expect(describeError(respond(502, '<html>Bad Gateway</html>'))).toMatchObject({
+      text: UNEXPECTED,
+      code: 'HTTP 502',
+      detail: 'status 502',
+    });
+  });
+
+  it('화면 쪽 예외 — 원문은 사용자 문장이 아니라 detail 에 둔다', () => {
+    expect(describeError(new Error('계약 위반 응답: success=true, data=null'))).toEqual({
+      text: UNEXPECTED,
+      code: null,
+      recovery: null,
+      fieldErrors: [],
+      detail: '계약 위반 응답: success=true, data=null',
+    });
+  });
+
+  it('fieldMessages — 그 필드의 메시지만, 온 순서대로 모두', () => {
+    const e = apiError(400, 'C001', '잘못된 입력값입니다.', [
+      { field: 'nickname', message: '닉네임은 2~10자여야 합니다.' },
+      { field: 'email', message: '올바른 이메일 형식이 아닙니다.' },
+      { field: 'nickname', message: '같은 필드의 두 번째 메시지' },
+    ]);
+    expect(fieldMessages(e, 'nickname')).toEqual(['닉네임은 2~10자여야 합니다.', '같은 필드의 두 번째 메시지']);
+    expect(fieldMessages(new Error('x'), 'nickname')).toEqual([]);
   });
 });

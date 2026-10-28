@@ -46,7 +46,7 @@ export function baseUrlFor(path: string): string {
   if (PROXY_MODE) return '';
   const service = serviceOf(path);
   if (service === null) {
-    throw new Error(`서비스 접두어를 모르는 경로다: ${path} (api-contract.md §1)`);
+    throw new Error(`서비스 접두어를 모르는 경로다: ${path}`);
   }
   return BASE[service];
 }

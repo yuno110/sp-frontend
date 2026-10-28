@@ -9,7 +9,6 @@ import {
   type PostSort,
   type SearchType,
 } from '@/features/board/types';
-import { messageOf } from '@/lib/api/client';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, Empty, ErrorBox } from '@/components/ui';
 import { PostTable } from '@/components/PostTable';
@@ -110,7 +109,7 @@ export function PostListPage() {
         ) : null}
       </div>
 
-      {query.isError ? <ErrorBox message={messageOf(query.error)} /> : null}
+      {query.isError ? <ErrorBox error={query.error} /> : null}
 
       {query.isLoading ? (
         <Empty>불러오는 중…</Empty>

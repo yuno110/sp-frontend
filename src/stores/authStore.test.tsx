@@ -546,3 +546,102 @@ describe('영속 저장소에 접근할 수 없는 환경', () => {
     }
   });
 });
+
+/**
+ * 세션을 끝낸 실패의 이유 (sp-docs/plan/phase2.md §7.2 F-03). 보호된 화면은 토큰이 비면 로그인으로 가며 그 오류를
+ * 잃으므로 실패를 저장소에 남기고 로그인 화면이 이어 보인다(src/pages/userCopy.test.tsx). 토큰을 지우고 남기는 판단은
+ * 위의 describe 들이 잠그고, 여기는 **끝난 세션이 있을 때만** 이유가 남는지를 본다.
+ */
+describe('세션을 끝낸 실패의 이유', () => {
+  it('새로고침 복원이 거부되면 그 실패를 남긴다', async () => {
+    await loggedInOnPreviousPage();
+    routes = { [REISSUE]: (config) => fail(config, 401, 'A002') };
+    const { restoreSession, useAuthStore, errorOf } = await load();
+
+    expect(await restoreSession()).toBeNull();
+    expect(errorOf(useAuthStore.getState().sessionFailure)?.code).toBe('A002');
+  });
+
+  it('401 복구의 재발급이 거부되어 세션이 끝나면 — 원요청의 401 을 남긴다', async () => {
+    routes = {
+      [REISSUE]: (config) => fail(config, 401, 'A002'),
+      'GET /api/v1/posts/me': (config) => fail(config, 401, 'A003'),
+    };
+    const { http, errorOf, useAuthStore } = await load();
+    useAuthStore.getState().setTokens(tokens('1'));
+
+    await http.get('/api/v1/posts/me').catch(() => null);
+
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(errorOf(useAuthStore.getState().sessionFailure)?.code).toBe('A003');
+  });
+
+  it('401 복구의 재발급에 응답이 없으면 — 세션이 끝나지 않았으므로 남기지 않는다', async () => {
+    routes = {
+      [REISSUE]: (config) => noResponse(config, AxiosError.ERR_NETWORK),
+      'GET /api/v1/posts/me': (config) => fail(config, 401, 'A003'),
+    };
+    const { http, useAuthStore } = await load();
+    useAuthStore.getState().setTokens(tokens('1'));
+
+    await http.get('/api/v1/posts/me').catch(() => null);
+
+    expect(useAuthStore.getState().accessToken).toBe(accessToken('1'));
+    expect(useAuthStore.getState().sessionFailure).toBeNull();
+  });
+
+  it('되살리는 창에서 로그인했으면 — 늦게 끝난 재발급의 실패를 남기지 않는다', async () => {
+    await loggedInOnPreviousPage();
+    const gate = deferred();
+    routes = {
+      [REISSUE]: async (config) => {
+        await gate.promise;
+        return fail(config, 401, 'A002');
+      },
+      'POST /api/v1/auth/login': () => ok(tokens('L')),
+      'GET /api/v1/posts': () => ok(EMPTY_PAGE),
+      'GET /api/v1/members/me': () => ok(PROFILE),
+    };
+    const { useAuthStore } = await renderApp('/login');
+
+    fireEvent.change(screen.getByLabelText('이메일'), { target: { value: 'user@example.com' } });
+    fireEvent.change(screen.getByLabelText('비밀번호'), { target: { value: 'password' } });
+    fireEvent.click(screen.getByRole('button', { name: '로그인' }));
+    await waitFor(() => expect(pathname()).toBe('/posts'));
+
+    gate.resolve();
+    await waitFor(() => expect(useAuthStore.getState().restoring).toBe(false));
+
+    expect(useAuthStore.getState().accessToken).toBe(accessToken('L'));
+    expect(useAuthStore.getState().sessionFailure).toBeNull();
+  });
+
+  it('복구 전에 로그아웃했으면 — 늦게 온 401 을 남기지 않는다', async () => {
+    const gate = deferred();
+    routes = {
+      'GET /api/v1/posts/me': async (config) => {
+        await gate.promise;
+        return fail(config, 401, 'A003');
+      },
+    };
+    const { http, useAuthStore } = await load();
+    useAuthStore.getState().setTokens(tokens('1'));
+
+    const request = http.get('/api/v1/posts/me').catch(() => null);
+    useAuthStore.getState().clear();
+    gate.resolve();
+    await request;
+
+    expect(reissues()).toHaveLength(0);
+    expect(useAuthStore.getState().sessionFailure).toBeNull();
+  });
+
+  it('다시 로그인하면 지운다', async () => {
+    const { useAuthStore } = await load();
+    useAuthStore.getState().setSessionFailure(new Error('끝난 세션'));
+
+    useAuthStore.getState().setTokens(tokens('1'));
+
+    expect(useAuthStore.getState().sessionFailure).toBeNull();
+  });
+});

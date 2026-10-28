@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import { login } from '@/features/auth/api';
-import { messageOf } from '@/lib/api/client';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
@@ -16,17 +15,29 @@ export function LoginPage() {
   const setTokens = useAuthStore((s) => s.setTokens);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+
+  // 세션을 끝낸 실패 — 보호된 화면은 토큰이 비면 이리로 오면서 그 오류를 잃는다. 여기서 이어 보이고 저장소에서는
+  // 지운다(한 번만 보인다, stores/authStore.ts 의 `sessionFailure`). 이 화면이 그려진 뒤에 남겨진 실패도 받는다 —
+  // 토큰이 비는 것과 이유가 남는 것 사이에 화면이 먼저 바뀔 수 있다.
+  const sessionFailure = useAuthStore((s) => s.sessionFailure);
+  const [ended, setEnded] = useState<unknown>(() => useAuthStore.getState().sessionFailure);
+  useEffect(() => {
+    if (sessionFailure == null) return;
+    setEnded(sessionFailure);
+    useAuthStore.getState().setSessionFailure(null);
+  }, [sessionFailure]);
 
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setEnded(null);
     try {
       setTokens(await login(email, password));
       navigate('/posts');
     } catch (e) {
-      setError(messageOf(e));
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -35,6 +46,12 @@ export function LoginPage() {
   return (
     <div className="mx-auto max-w-md">
       <Panel title="로그인">
+        {ended != null ? (
+          <div className="mb-3 space-y-2">
+            <p className="text-sm text-default">로그인 상태를 이어가지 못했습니다.</p>
+            <ErrorBox error={ended} />
+          </div>
+        ) : null}
         <form
           className="space-y-3"
           onSubmit={(e) => {
@@ -53,7 +70,7 @@ export function LoginPage() {
               autoComplete="current-password"
             />
           </Field>
-          <ErrorBox message={error} />
+          <ErrorBox error={error} />
           <Button type="submit" variant="primary" disabled={busy} className="w-full justify-center">
             {busy ? '확인 중…' : '로그인'}
           </Button>

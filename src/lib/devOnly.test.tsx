@@ -130,8 +130,11 @@ async function renderApp(mode: Mode, path: string, { loggedIn }: { loggedIn: boo
   render(<App />);
 }
 
-/** 머리글 — 상표 링크를 품은 `header`. 패널 제목도 `header` 라서 태그만으로 찾지 않는다. */
-const banner = () => screen.getByRole('link', { name: 'sp-frontend' }).closest('header');
+/**
+ * 머리글 — 탐색(`nav`)을 품은 `header`. 패널 제목과 목록 머리도 `header` 라서 태그만으로 찾지 않는다.
+ * (앞 판은 상표 링크로 찾았다. 상표가 제품 이름 「게시판」이 되며 링크가 아니게 됐다 — F-03.)
+ */
+const banner = () => screen.getByRole('navigation').closest('header');
 const main = () => document.querySelector('main');
 
 /** 없다는 단언은 화면이 다 그려진 뒤에 한다. 그리기 전이면 무엇이든 없다. */

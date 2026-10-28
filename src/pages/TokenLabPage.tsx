@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import http, { messageOf } from '@/lib/api/client';
+import http from '@/lib/api/client';
 import { reissue } from '@/features/auth/api';
 import { decodeClaims, secondsUntilExpiry } from '@/lib/jwt';
 import { useAuthStore } from '@/stores/authStore';
@@ -41,7 +41,7 @@ export function TokenLabPage() {
   const [result, setResult] = useState<string | null>(null);
   // 기대한 성공인지 기대와 다른 성공인지. 뒤쪽을 초록으로 칠하면 문장과 색이 어긋난다.
   const [resultKind, setResultKind] = useState<'ok' | 'unexpected'>('ok');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
   const claims = decodeClaims(accessToken);
   const expiresIn = secondsUntilExpiry(claims);
@@ -63,7 +63,7 @@ export function TokenLabPage() {
       });
       setResult(`${res.status} — 통과했다`);
     } catch (e) {
-      setError(messageOf(e));
+      setError(e);
     }
   };
 
@@ -134,7 +134,7 @@ export function TokenLabPage() {
                       : '재발급 성공 — 그런데 refreshToken 이 그대로다 (회전이 안 됐다)',
                   );
                 } catch (e) {
-                  setError(messageOf(e));
+                  setError(e);
                 }
               })()
             }
@@ -156,7 +156,7 @@ export function TokenLabPage() {
                     `밀려난 토큰이 또 통과했다 — 회전이 무효화되지 않았다 (expiresIn ${next.accessTokenExpiresIn}s)`,
                   );
                 } catch (e) {
-                  setError(messageOf(e));
+                  setError(e);
                 }
               })()
             }
@@ -230,7 +230,7 @@ export function TokenLabPage() {
           </div>
         ) : null}
         <div className="mt-3">
-          <ErrorBox message={error} />
+          <ErrorBox error={error} />
         </div>
         <p className="mt-3 text-xs text-faint">
           결과는 아래 요청 기록에도 남는다. 만료 토큰은 여기서 만들 수 없다 — 개인키로 서명해야

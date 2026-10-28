@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listMyPosts } from '@/features/board/api';
 import { SORT_LABEL, type PostSort } from '@/features/board/types';
-import { messageOf } from '@/lib/api/client';
 import { Empty, ErrorBox } from '@/components/ui';
 import { PostTable } from '@/components/PostTable';
 import { Pager } from '@/components/Pager';
@@ -47,7 +46,7 @@ export function MyPostsPage() {
         </select>
       </header>
 
-      {query.isError ? <ErrorBox message={messageOf(query.error)} /> : null}
+      {query.isError ? <ErrorBox error={query.error} /> : null}
 
       {query.isLoading ? (
         <Empty>불러오는 중…</Empty>

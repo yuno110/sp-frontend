@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { createPost, getPost, updatePost } from '@/features/board/api';
 import { POST_CONTENT_MAX, TITLE_MAX } from '@/features/board/types';
-import { errorOf, messageOf } from '@/lib/api/client';
+import { fieldMessages } from '@/lib/api/client';
 import { Button, ErrorBox, Field, Input, Panel, Textarea } from '@/components/ui';
+
+/** 입력칸 옆에 오류를 그리는 필드. 나머지 필드의 오류는 요약에 남는다. */
+const INLINE_FIELDS = ['title', 'content'];
 
 /**
  * 글 작성·수정.
@@ -19,8 +22,7 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
   const navigate = useNavigate();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [fields, setFields] = useState<string[]>([]);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
   const existing = useQuery({
@@ -40,7 +42,6 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
   const submit = async () => {
     setBusy(true);
     setError(null);
-    setFields([]);
     try {
       const saved =
         mode === 'create'
@@ -48,12 +49,26 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
           : await updatePost(postId, title, content);
       navigate(`/posts/${saved.id}`);
     } catch (e) {
-      setError(messageOf(e));
-      setFields((errorOf(e)?.fieldErrors ?? []).map((f) => `${f.field}: ${f.message}`));
+      setError(e);
     } finally {
       setBusy(false);
     }
   };
+
+  // 고칠 글을 받지 못했으면 폼 대신 그 실패를 보인다. 빈 폼은 그 글이 비어 있는 것처럼 보이고, 저장하면
+  // 보지 못한 글을 덮어쓴다(AGENTS.md 불변식 9).
+  if (existing.isError) {
+    return (
+      <Panel title="글 수정">
+        <div className="space-y-3">
+          <ErrorBox error={existing.error} />
+          <Link to="/posts" className="text-sm text-accent-600 underline">
+            목록으로
+          </Link>
+        </div>
+      </Panel>
+    );
+  }
 
   return (
     <Panel title={mode === 'create' ? '새 글' : '글 수정'}>
@@ -64,10 +79,18 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
           void submit();
         }}
       >
-        <Field label="제목" hint={`${title.length} / ${TITLE_MAX} · 공백만으로 채울 수 없다`}>
+        <Field
+          label="제목"
+          hint={`${title.length} / ${TITLE_MAX} · 공백만으로 채울 수 없다`}
+          errors={fieldMessages(error, 'title')}
+        >
           <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={TITLE_MAX} />
         </Field>
-        <Field label="본문" hint={`${content.length} / ${POST_CONTENT_MAX}`}>
+        <Field
+          label="본문"
+          hint={`${content.length} / ${POST_CONTENT_MAX}`}
+          errors={fieldMessages(error, 'content')}
+        >
           <Textarea
             rows={14}
             value={content}
@@ -75,21 +98,15 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
             maxLength={POST_CONTENT_MAX}
           />
         </Field>
-        <ErrorBox message={error} fields={fields} />
+        <ErrorBox error={error} inlineFields={INLINE_FIELDS} />
         <div className="flex items-center gap-2">
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? '보내는 중…' : mode === 'create' ? 'POST /api/v1/posts' : `PUT /api/v1/posts/${postId}`}
+            {busy ? '보내는 중…' : mode === 'create' ? '등록' : '저장'}
           </Button>
           <Button onClick={() => navigate(-1)}>취소</Button>
           {mode === 'create' ? (
-            <span className="text-xs text-faint">
-              작성은 member 내부 API 를 먼저 호출한다 — 프로필 없음 403 S002, 연동 실패 503 S001
-            </span>
-          ) : (
-            <span className="text-xs text-faint">
-              수정은 스냅샷을 갱신하지 않으므로 member 를 호출하지 않는다
-            </span>
-          )}
+            <span className="text-xs text-faint">작성에는 프로필이 필요하다</span>
+          ) : null}
         </div>
       </form>
     </Panel>

@@ -23,8 +23,15 @@ interface AuthState {
    * 보호된 경로가 판정을 미룬다(router.tsx 의 `RequireToken`).
    */
   restoring: boolean;
+  /**
+   * 세션을 끝냈거나 되살리지 못한 실패(lib/api/client.ts 가 남긴다). 보호된 화면은 토큰이 비면 로그인으로 가면서 그
+   * 오류를 잃으므로 로그인 화면이 이어 보이고 지운다(pages/LoginPage.tsx). 다시 로그인하면(`setTokens`) 지운다.
+   * 영속하지 않고, 토큰을 지우거나 남기는 판단에 쓰지 않는다.
+   */
+  sessionFailure: unknown;
   setTokens: (t: TokenResponse) => void;
   setAccessToken: (accessToken: string) => void;
+  setSessionFailure: (failure: unknown) => void;
   clear: () => void;
 }
 
@@ -73,9 +80,16 @@ export const useAuthStore = create<AuthState>()((set) => ({
   accountId: null,
   role: null,
   restoring: persisted !== null,
+  sessionFailure: null,
   setTokens: (t) =>
-    set({ accessToken: t.accessToken, refreshToken: t.refreshToken, ...claimsOf(t.accessToken) }),
+    set({
+      accessToken: t.accessToken,
+      refreshToken: t.refreshToken,
+      ...claimsOf(t.accessToken),
+      sessionFailure: null,
+    }),
   setAccessToken: (accessToken) => set({ accessToken, ...claimsOf(accessToken) }),
+  setSessionFailure: (sessionFailure) => set({ sessionFailure }),
   clear: () => set({ accessToken: null, refreshToken: null, accountId: null, role: null }),
 }));
 
