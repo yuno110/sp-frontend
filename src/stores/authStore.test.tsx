@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { holds } from '@/test/holds';
 
 /**
  * 토큰 보관과 새로고침 뒤의 세션 복원 (sp-docs/plan/phase2.md §7.2 F-02).
@@ -574,6 +575,27 @@ describe('세션을 끝낸 실패의 이유', () => {
 
     expect(useAuthStore.getState().accessToken).toBeNull();
     expect(errorOf(useAuthStore.getState().sessionFailure)?.code).toBe('A003');
+  });
+
+  it('비밀번호를 싣는 요청이 세션을 끝내면 — 남긴 실패에는 그 비밀번호가 없다. 코드·메시지·상태는 그대로다', async () => {
+    const password = 'Withdraw-Passw0rd!';
+    routes = {
+      [REISSUE]: (config) => fail(config, 401, 'A002'),
+      'DELETE /api/v1/accounts/me': (config) => fail(config, 401, 'A003'),
+    };
+    const { http, errorOf, useAuthStore } = await load();
+    useAuthStore.getState().setTokens(tokens('1'));
+
+    const received = await http.delete('/api/v1/accounts/me', { data: { password } }).catch((e: unknown) => e);
+
+    // 양성 대조 — 요청은 비밀번호를 실었고, 요청한 쪽이 받는 원래 오류는 그것을 든 채다. 이 검사가 그 모양을 들여다본다.
+    expect(requests.find((r) => r.key === 'DELETE /api/v1/accounts/me')?.body).toEqual({ password });
+    expect(holds(received, password)).toBe(true);
+    const failure = useAuthStore.getState().sessionFailure as AxiosError;
+    expect(holds(failure, password)).toBe(false);
+    expect(errorOf(failure)).toEqual(errorOf(received));
+    expect(failure.message).toBe((received as AxiosError).message);
+    expect([failure.status, failure.response?.status]).toEqual([401, 401]);
   });
 
   it('401 복구의 재발급에 응답이 없으면 — 세션이 끝나지 않았으므로 남기지 않는다', async () => {

@@ -2,7 +2,7 @@ import { Navigate, createBrowserRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { Layout } from '@/components/Layout';
 import { LoginPage } from '@/pages/LoginPage';
-import { SignupPage } from '@/pages/SignupPage';
+import { SignupPage, SignupProfilePage } from '@/pages/SignupPage';
 import { PostListPage } from '@/pages/PostListPage';
 import { PostDetailPage } from '@/pages/PostDetailPage';
 import { PostFormPage } from '@/pages/PostFormPage';
@@ -45,7 +45,16 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/posts" replace /> },
       { path: 'login', element: <LoginPage /> },
       { path: 'signup', element: <SignupPage /> },
-      { path: 'signup/profile', element: <SignupPage startAt={2} /> },
+      // 프로필 등록은 인증 요청이다. 공개 경로로 두면 새로고침 복원이 끝나기 전에 제출해 401 A001 이 난다 — 보호된
+      // 경로라 복원이 끝날 때까지 그리지 않는다.
+      {
+        path: 'signup/profile',
+        element: (
+          <RequireToken>
+            <SignupProfilePage />
+          </RequireToken>
+        ),
+      },
       {
         path: 'posts/mine',
         element: (

@@ -65,6 +65,17 @@ export const MY_PROFILE: Meanings = {
   M001: { text: '아직 프로필을 등록하지 않았습니다.', recovery: 'profile' },
 };
 
+/**
+ * 계정 탈퇴가 끝난 뒤의 로그인 만료 — 다시 로그인하라고 안내하지 않는다. 탈퇴한 계정은 로그인도 재발급도 되지 않는다
+ * (api-contract.md §2.1 의 `account.deleted` 검사, §2.2 의 Refresh Token 삭제). 로그인 화면이 탈퇴를 마치지 못한 사실과
+ * 함께 쓰고(pages/LoginPage.tsx), 마이페이지의 탈퇴 칸이 계정 탈퇴가 끝난 동안 쓴다 — 재발급이 응답하지 못하면 토큰이 남아
+ * 그 화면에 머문다(pages/MyPage.tsx). 그 자리의 실패는 401 복구가 끝내지 못한 요청이다 — 복구하는 코드는 `A003` 이다
+ * (lib/api/client.ts).
+ */
+export const AFTER_WITHDRAWAL: Meanings = {
+  A003: { text: '로그인이 만료되었습니다.' },
+};
+
 /** 응답이 아예 없는 실패 — 연결 거부·CORS 거부·타임아웃. 업무 오류와 다른 문장이다. */
 export const NO_RESPONSE = '서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 잠시 후 다시 시도해 주세요.';
 

@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { changePassword, getMyAccount, withdrawAccount } from '@/features/auth/api';
 import { getMyProfile, updateNickname, withdrawProfile } from '@/features/member/api';
-import { fieldMessages } from '@/lib/api/client';
-import { MY_PROFILE } from '@/lib/api/errorCodes';
+import { errorOf, fieldMessages } from '@/lib/api/client';
+import { AFTER_WITHDRAWAL, MY_PROFILE } from '@/lib/api/errorCodes';
+import { withoutRequestBody } from '@/lib/api/withoutRequestBody';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { formatDateTime } from '@/lib/format';
 import { useAuthStore } from '@/stores/authStore';
@@ -17,24 +18,26 @@ import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
  * 있다 (api-contract.md §2.2·§3.1). 그리고 **두 "가입일" 이 다른 값이다** — account.created_at
  * 과 member.created_at 은 사이에 로그인이 끼어 같지 않다 (adr/0012 §4).
  *
- * 탈퇴는 2단계이고 **순서를 바꾸지 않는다** — 계정(auth) 다음 프로필(member)이다 (§9.1.1).
+ * 탈퇴는 사용자에게 한 동작이고 화면이 계정(auth) → 프로필(member) 순서로 부른다. **순서를 바꾸지 않는다**(§9.1.1).
  */
 export function MyPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { accountId, role, clear } = useAuthStore();
+  const { accountId, role, withdrawal, setWithdrawal, clear } = useAuthStore();
 
   const [nickname, setNickname] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [withdrawPassword, setWithdrawPassword] = useState('');
+  const [withdrawError, setWithdrawError] = useState<unknown>(null);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const account = useQuery({ queryKey: ['account', 'me'], queryFn: getMyAccount, retry: false });
   const profile = useQuery({ queryKey: ['member', 'me'], queryFn: getMyProfile, retry: false });
-  // 입력칸 옆에 오류를 그리는 필드 — 닉네임 입력칸은 프로필 조회가 실패하면 그려지지 않는다.
-  const inlineFields = ['currentPassword', 'newPassword', 'password', ...(profile.isError ? [] : ['nickname'])];
+  // 입력칸 옆에 오류를 그리는 필드 — 닉네임 입력칸은 프로필 조회가 실패하면 그려지지 않는다. 탈퇴의 오류는 탈퇴 칸이 따로 그린다.
+  const inlineFields = ['currentPassword', 'newPassword', ...(profile.isError ? [] : ['nickname'])];
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     setError(null);
@@ -43,8 +46,44 @@ export function MyPage() {
       await fn();
       setNotice(`${label} 완료`);
     } catch (e) {
-      setError(e);
+      // 쥐는 것은 요청 본문을 비운 사본이다 — 비밀번호 변경의 본문에는 비밀번호가 있다.
+      setError(withoutRequestBody(e));
     }
+  };
+
+  /**
+   * 탈퇴. 비밀번호를 한 번 받아 계정 탈퇴 → 프로필 탈퇴를 부른다(api-contract.md §9.1.1). 프로필 탈퇴는 계정 탈퇴에서 쓰던
+   * Access Token 으로 나간다 — 계정 탈퇴가 Refresh Token 을 지워 재발급되지 않으므로 **토큰은 끝난 뒤에 지운다.**
+   *
+   * 다시 시도는 첫 단계부터다. 비밀번호도 다시 받는다 — 탈퇴한 계정의 계정 탈퇴는 비밀번호가 틀려도 204 지만 빈 값은
+   * `C001` 이다(§2.2).
+   */
+  const withdraw = async () => {
+    setWithdrawing(true);
+    setWithdrawError(null);
+    try {
+      // 첫 단계가 어떤 이유로든 실패하면 둘째를 부르지 않는다.
+      await withdrawAccount(withdrawPassword);
+      setWithdrawPassword('');
+      setWithdrawal('account');
+      await withdrawProfile().catch((e: unknown) => {
+        // 프로필이 아예 없는 계정이다 — 지울 것이 없으므로 끝난 것이다(§3.1, 그 경우는 멱등의 대상이 아니라 404 다).
+        if (errorOf(e)?.code !== 'M001') throw e;
+      });
+    } catch (e) {
+      // 둘째 단계의 실패면 계정 탈퇴는 끝났다(`withdrawal`). 토큰이 남아 있으면 이 칸에서 다시 시도한다. 토큰이 비었으면
+      // (A003 뒤 재발급 실패) 이 화면은 로그인으로 가고 로그인 화면이 다시 시도할 수 없다는 것을 보인다. 쥐는 것은 요청
+      // 본문을 비운 사본이다 — 계정 탈퇴의 본문에는 비밀번호가 있다.
+      setWithdrawError(withoutRequestBody(e));
+      return;
+    } finally {
+      setWithdrawing(false);
+    }
+    // 로그아웃 요청은 보내지 않는다 — 로그아웃은 저장된 Refresh Token 을 지우는 것인데(requirements/member.md MR-06)
+    // 계정 탈퇴가 같은 트랜잭션에서 지웠고, 지울 것이 없어도 204 라(§2.1) 서버에서 바뀌는 것이 없다.
+    setWithdrawal('done');
+    clear();
+    navigate('/login', { replace: true });
   };
 
   return (
@@ -167,20 +206,23 @@ export function MyPage() {
         </Panel>
 
         <Panel title="탈퇴">
+          {withdrawal === 'account' ? (
+            <p className="mb-3 text-sm text-default">
+              계정은 탈퇴했지만 프로필 탈퇴를 마치지 못했습니다. 비밀번호를 다시 입력하고 다시 시도해 주세요. 로그인 상태가
+              끝나면 다시 시도할 수 없습니다 — 창을 닫거나 새로고침해도 끝납니다.
+            </p>
+          ) : null}
           <form
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
-              void run('탈퇴 1단계 (계정)', async () => {
-                await withdrawAccount(withdrawPassword);
-                setWithdrawPassword('');
-              });
+              void withdraw();
             }}
           >
             <Field
               label="현재 비밀번호"
-              hint="1단계는 비밀번호를 재확인한다"
-              errors={fieldMessages(error, 'password')}
+              hint="탈퇴하려면 비밀번호를 한 번 더 확인합니다"
+              errors={fieldMessages(withdrawError, 'password')}
             >
               <Input
                 type="password"
@@ -188,35 +230,16 @@ export function MyPage() {
                 onChange={(e) => setWithdrawPassword(e.target.value)}
               />
             </Field>
-            <Button type="submit" variant="danger">
-              1단계 — 계정 탈퇴
+            {/* 계정 탈퇴가 끝난 뒤의 실패는 다시 로그인하라고 하지 않는다 — 탈퇴한 계정은 로그인할 수 없다(AFTER_WITHDRAWAL). */}
+            <ErrorBox
+              error={withdrawError}
+              inlineFields={['password']}
+              meanings={withdrawal === 'account' ? AFTER_WITHDRAWAL : undefined}
+            />
+            <Button type="submit" variant="danger" disabled={withdrawing}>
+              {withdrawal === 'account' ? '다시 시도' : '탈퇴'}
             </Button>
           </form>
-          <div className="mt-3 border-t border-line-soft pt-3">
-            <Button
-              variant="danger"
-              onClick={() =>
-                void run('탈퇴 2단계 (프로필)', async () => {
-                  await withdrawProfile();
-                })
-              }
-            >
-              2단계 — 프로필 탈퇴
-            </Button>
-            <p className="mt-2 text-xs text-faint">
-              1단계를 마친 뒤 이 화면에서 이어서 누른다. 여러 번 눌러도 된다.
-            </p>
-          </div>
-          <div className="mt-3 border-t border-line-soft pt-3">
-            <Button
-              onClick={() => {
-                clear();
-                navigate('/login');
-              }}
-            >
-              이 탭에서만 로그아웃
-            </Button>
-          </div>
         </Panel>
       </div>
     </div>

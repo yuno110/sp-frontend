@@ -38,6 +38,7 @@ type FieldErrors = Array<{ field: string; message: string }>;
 /** 서버가 코드마다 내는 메시지 (sp-docs/api-contract.md §8). 화면이 무엇을 대신 보여주는지 보려고 그대로 싣는다. */
 const SERVER_MESSAGE: Record<string, string> = {
   C001: '잘못된 입력값입니다.',
+  C005: '서버 내부 오류가 발생했습니다.',
   A001: '인증이 필요합니다.',
   A002: '유효하지 않은 토큰입니다.',
   A003: '만료된 토큰입니다.',
@@ -47,9 +48,11 @@ const SERVER_MESSAGE: Record<string, string> = {
   S001: '일시적으로 서비스 연동에 실패했습니다.',
   S002: '프로필 등록이 필요합니다.',
   AU003: '이메일 또는 비밀번호가 일치하지 않습니다.',
+  AU004: '현재 비밀번호가 일치하지 않습니다.',
 };
 
 const ok = (data: unknown): Reply => ({ status: 200, body: { success: true, data, error: null } });
+const NO_CONTENT: Reply = { status: 204, body: '' };
 const fail = (status: number, code: string, fieldErrors: FieldErrors = [], message = SERVER_MESSAGE[code]): Reply => ({
   status,
   body: { success: false, data: null, error: { code, message, fieldErrors } },
@@ -204,20 +207,33 @@ afterEach(() => {
   window.history.replaceState(null, '', '/');
 });
 
-/* ───────── 가입 단계로 가는 조작 ───────── */
+/* ───────── 가입·탈퇴로 가는 조작 ───────── */
 
-async function signupToLoginStep() {
+/** 계정 정보를 낸다 — 계정을 만든 화면이 이어서 로그인한다(F-04). */
+function submitAccount() {
   type(screen.getByLabelText(/^이메일/), 'new@example.com');
   type(screen.getByLabelText(/^비밀번호/), 'Passw0rd!');
   fireEvent.submit(main().querySelector('form')!);
-  await until(['2단계 — 로그인']);
 }
 
+/** 프로필 등록 화면까지. 단계 표시에도 「프로필 등록」이 있으므로 그 화면에만 있는 입력칸으로 기다린다. */
 async function signupToProfileStep() {
-  await signupToLoginStep();
-  fireEvent.click(within(main()).getByRole('button'));
-  await until(['3단계 — 프로필 등록']);
+  submitAccount();
+  await screen.findByLabelText(/^닉네임/);
 }
+
+/** 마이페이지의 탈퇴 칸에서 비밀번호를 내고 탈퇴를 누른다. */
+async function submitWithdrawal() {
+  await until([ACCOUNT.email], main);
+  const panel = section(/^탈퇴/);
+  type(within(panel).getByLabelText(/^현재 비밀번호/), 'Passw0rd!');
+  fireEvent.submit(panel.querySelector('form')!);
+}
+
+const WITHDRAWN_BOTH: Routes = {
+  'DELETE /api/v1/accounts/me': () => NO_CONTENT,
+  'DELETE /api/v1/members/me': () => NO_CONTENT,
+};
 
 const SIGNUP_ROUTES: Routes = {
   'POST /api/v1/accounts': () => ok({ accountId: 7, email: 'new@example.com' }),
@@ -384,6 +400,52 @@ const COPY_STATES: CopyState[] = [
     },
   },
   {
+    name: '마이페이지 — 탈퇴, 비밀번호가 틀림',
+    path: '/me',
+    as: ME,
+    extra: { 'DELETE /api/v1/accounts/me': () => fail(400, 'AU004') },
+    ready: async () => {
+      await submitWithdrawal();
+      await errorShown();
+    },
+  },
+  {
+    name: '마이페이지 — 탈퇴, 프로필 탈퇴를 마치지 못함',
+    path: '/me',
+    as: ME,
+    extra: { ...WITHDRAWN_BOTH, 'DELETE /api/v1/members/me': () => fail(500, 'C005') },
+    ready: async () => {
+      await submitWithdrawal();
+      await screen.findByRole('button', { name: '다시 시도' });
+      await errorShown();
+    },
+  },
+  {
+    name: '로그인 — 탈퇴를 마침',
+    path: '/me',
+    as: ME,
+    extra: WITHDRAWN_BOTH,
+    ready: async () => {
+      await submitWithdrawal();
+      await until(['탈퇴했습니다.', '계정이 없으면'], main);
+    },
+  },
+  {
+    name: '로그인 — 탈퇴를 마치지 못하고 로그인 상태가 끝남',
+    path: '/me',
+    as: ME,
+    extra: {
+      ...WITHDRAWN_BOTH,
+      'DELETE /api/v1/members/me': () => fail(401, 'A003'),
+      'POST /api/v1/auth/reissue': () => fail(401, 'A002'),
+    },
+    ready: async () => {
+      await submitWithdrawal();
+      await until(['다시 시도할 수 없습니다.', '계정이 없으면'], main);
+      await errorShown();
+    },
+  },
+  {
     name: '마이페이지 — 닉네임 수정 완료',
     path: '/me',
     as: ME,
@@ -443,7 +505,17 @@ const COPY_STATES: CopyState[] = [
       await until(['이미 쓰이고']);
     },
   },
-  { name: '가입 — 로그인 단계', path: '/signup', extra: SIGNUP_ROUTES, ready: signupToLoginStep },
+  {
+    // F-04 전의 「로그인 단계」 — 계정을 만든 뒤의 로그인을 화면이 하므로, 그 결과가 사용자에게 보이는 것은 실패했을 때다.
+    name: '가입 — 계정을 만들었지만 로그인하지 못함',
+    path: '/signup',
+    extra: { ...SIGNUP_ROUTES, 'POST /api/v1/auth/login': () => fail(500, 'C005') },
+    ready: async () => {
+      submitAccount();
+      await until(['계정을 만들었습니다.'], main);
+      await errorShown();
+    },
+  },
   {
     name: '가입 — 프로필 단계, 닉네임 중복 확인',
     path: '/signup',
@@ -453,7 +525,8 @@ const COPY_STATES: CopyState[] = [
       type(screen.getByLabelText(/^닉네임/), '새닉');
       fireEvent.click(screen.getByRole('button', { name: '중복 확인' }));
       await until(['쓸 수 있']);
-      await waitFor(() => expect(within(banner()).getByRole('link', { name: /프로필/ })).toBeInTheDocument());
+      // 머리글의 프로필 조회가 그려질 때까지. 프로필 등록 화면에서는 그리로 가는 링크를 두지 않는다(components/ui.tsx).
+      await until([MY_PROFILE.M001.text], banner);
     },
   },
   {

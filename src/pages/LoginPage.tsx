@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import { login } from '@/features/auth/api';
+import { AFTER_WITHDRAWAL } from '@/lib/api/errorCodes';
+import { withoutRequestBody } from '@/lib/api/withoutRequestBody';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
@@ -29,15 +31,39 @@ export function LoginPage() {
     useAuthStore.getState().setSessionFailure(null);
   }, [sessionFailure]);
 
+  // 가입이 계정을 만든 뒤 로그인에 실패했다(pages/SignupPage.tsx). 같은 방식으로 한 번 보이고 지운다.
+  const signupLoginFailure = useAuthStore((s) => s.signupLoginFailure);
+  const [signedUp, setSignedUp] = useState<unknown>(() => useAuthStore.getState().signupLoginFailure);
+  useEffect(() => {
+    if (signupLoginFailure == null) return;
+    setSignedUp(signupLoginFailure);
+    useAuthStore.getState().setSignupLoginFailure(null);
+  }, [signupLoginFailure]);
+
+  // 탈퇴가 어디까지 끝났는가(pages/MyPage.tsx). 토큰이 없을 때만 보인다 — 토큰이 남아 있으면 마이페이지에서 다시 시도할 수 있다.
+  const withdrawal = useAuthStore((s) => (s.accessToken === null ? s.withdrawal : null));
+  const [withdrawn, setWithdrawn] = useState(() => {
+    const s = useAuthStore.getState();
+    return s.accessToken === null ? s.withdrawal : null;
+  });
+  useEffect(() => {
+    if (withdrawal === null) return;
+    setWithdrawn(withdrawal);
+    useAuthStore.getState().setWithdrawal(null);
+  }, [withdrawal]);
+
   const submit = async () => {
     setBusy(true);
     setError(null);
     setEnded(null);
+    setSignedUp(null);
+    setWithdrawn(null);
     try {
       setTokens(await login(email, password));
       navigate('/posts');
     } catch (e) {
-      setError(e);
+      // 쥐는 것은 요청 본문을 비운 사본이다 — 로그인 본문에는 비밀번호가 있다.
+      setError(withoutRequestBody(e));
     } finally {
       setBusy(false);
     }
@@ -46,10 +72,31 @@ export function LoginPage() {
   return (
     <div className="mx-auto max-w-md">
       <Panel title="로그인">
-        {ended != null ? (
+        {withdrawn === 'done' ? (
+          <p className="mb-3 rounded-md border border-line bg-success-50 px-3 py-2 text-sm text-success-600">
+            탈퇴했습니다.
+          </p>
+        ) : null}
+        {withdrawn === 'account' ? (
+          // 계정 탈퇴 뒤에 로그인 상태가 끝났다. 끝낸 실패가 있으면 함께 보이되 다시 로그인하라고 하지 않는다(AFTER_WITHDRAWAL).
+          <div className="mb-3 space-y-2">
+            <p className="text-sm text-default">
+              계정은 탈퇴했지만 프로필 탈퇴를 마치지 못했습니다. 로그인 상태가 끝나 다시 시도할 수 없습니다.
+            </p>
+            <ErrorBox error={ended} meanings={AFTER_WITHDRAWAL} />
+          </div>
+        ) : ended != null ? (
           <div className="mb-3 space-y-2">
             <p className="text-sm text-default">로그인 상태를 이어가지 못했습니다.</p>
             <ErrorBox error={ended} />
+          </div>
+        ) : null}
+        {signedUp != null ? (
+          <div className="mb-3 space-y-2">
+            <p className="text-sm text-default">
+              계정을 만들었습니다. 이어서 로그인하지 못했으니 아래에서 로그인해 주세요.
+            </p>
+            <ErrorBox error={signedUp} />
           </div>
         ) : null}
         <form

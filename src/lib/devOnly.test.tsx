@@ -220,10 +220,10 @@ describe.each([
     devOnly: ['api-contract.md §9.1'],
   },
   {
-    screenName: '가입 3단계',
+    screenName: '가입 — 프로필 등록',
     path: '/signup/profile',
     loggedIn: true,
-    ready: ['3단계 — 프로필 등록'],
+    ready: ['나중에 등록해도 된다'],
     devOnly: [`sub (= ${ACCOUNT_ID})`],
   },
 ])('$screenName', ({ path, loggedIn, ready, devOnly }) => {

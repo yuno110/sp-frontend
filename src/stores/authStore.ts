@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { TokenResponse } from '@/lib/api/types';
+import { withoutRequestBody } from '@/lib/api/withoutRequestBody';
 import { decodeClaims } from '@/lib/jwt';
 
 /**
@@ -26,12 +27,27 @@ interface AuthState {
   /**
    * 세션을 끝냈거나 되살리지 못한 실패(lib/api/client.ts 가 남긴다). 보호된 화면은 토큰이 비면 로그인으로 가면서 그
    * 오류를 잃으므로 로그인 화면이 이어 보이고 지운다(pages/LoginPage.tsx). 다시 로그인하면(`setTokens`) 지운다.
-   * 영속하지 않고, 토큰을 지우거나 남기는 판단에 쓰지 않는다.
+   * 영속하지 않고, 토큰을 지우거나 남기는 판단에 쓰지 않는다. 남기는 것은 요청 본문을 비운 사본이다(`withoutRequestBody`).
    */
   sessionFailure: unknown;
+  /**
+   * 이 탭의 탈퇴가 어디까지 끝났는가(pages/MyPage.tsx 가 남긴다). `'account'` 는 계정 탈퇴가 끝나고 프로필 탈퇴가 남은
+   * 상태이고 `'done'` 은 둘 다 끝난 상태다. 계정 탈퇴가 Refresh Token 을 지우므로(sp-docs/api-contract.md §9.1.1)
+   * `'account'` 에서 Access Token 을 잃으면 다시 시도할 수 없다 — 그때 로그인 화면이 그 사실을 보인다(pages/LoginPage.tsx).
+   * 로그인 화면은 토큰이 없을 때 한 번 보이고 지운다. 다시 로그인하면(`setTokens`) 지운다 — 로그인과 재발급은 탈퇴한
+   * 계정에 토큰을 주지 않는다(§2.1). 영속하지 않는다.
+   */
+  withdrawal: 'account' | 'done' | null;
+  /**
+   * 가입이 계정을 만든 뒤 이어서 한 로그인의 실패(pages/SignupPage.tsx 가 남긴다). 로그인 화면이 한 번 보이고 지운다.
+   * 영속하지 않는다. 남기는 것은 요청 본문을 비운 사본이다(`withoutRequestBody`).
+   */
+  signupLoginFailure: unknown;
   setTokens: (t: TokenResponse) => void;
   setAccessToken: (accessToken: string) => void;
   setSessionFailure: (failure: unknown) => void;
+  setWithdrawal: (withdrawal: 'account' | 'done' | null) => void;
+  setSignupLoginFailure: (failure: unknown) => void;
   clear: () => void;
 }
 
@@ -81,15 +97,21 @@ export const useAuthStore = create<AuthState>()((set) => ({
   role: null,
   restoring: persisted !== null,
   sessionFailure: null,
+  withdrawal: null,
+  signupLoginFailure: null,
   setTokens: (t) =>
     set({
       accessToken: t.accessToken,
       refreshToken: t.refreshToken,
       ...claimsOf(t.accessToken),
       sessionFailure: null,
+      withdrawal: null,
     }),
   setAccessToken: (accessToken) => set({ accessToken, ...claimsOf(accessToken) }),
-  setSessionFailure: (sessionFailure) => set({ sessionFailure }),
+  setSessionFailure: (sessionFailure) => set({ sessionFailure: withoutRequestBody(sessionFailure) }),
+  setWithdrawal: (withdrawal) => set({ withdrawal }),
+  setSignupLoginFailure: (signupLoginFailure) =>
+    set({ signupLoginFailure: withoutRequestBody(signupLoginFailure) }),
   clear: () => set({ accessToken: null, refreshToken: null, accountId: null, role: null }),
 }));
 
