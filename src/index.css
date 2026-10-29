@@ -26,10 +26,11 @@
   --color-elev: #ffffff;
   --color-subtle: #f1f3f5;
 
-  /* 글자 */
+  /* 글자 — 이 파일의 어느 면 색 위에서도 대비가 4.5:1 이상이다(WCAG AA, F-05 의 axe 검사). faint 도 그렇다 —
+     그래서 muted 와의 차이가 작다. */
   --color-default: #1f2328;
   --color-muted: #5b6471;
-  --color-faint: #8b95a1;
+  --color-faint: #646e7b;
 
   /* 선 — 전경 토큰과 이름이 겹치지 않게 line 네임스페이스를 쓴다.
      Tailwind v4 는 위의 `--color-default` 하나에서 `text-default` 와 `border-default` 를
@@ -49,7 +50,8 @@
   --color-danger-500: #d83b3b;
   --color-danger-600: #b92f2f;
   --color-success-50: #eaf7ef;
-  --color-success-600: #1f8a4c;
+  /* success-50 위의 글자다 — 그 위에서 대비가 4.5:1 이상이다(F-05). */
+  --color-success-600: #19783f;
   --color-warn-50: #fdf5e6;
   --color-warn-600: #a56a0b;
 }

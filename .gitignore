@@ -23,6 +23,12 @@ dist-ssr
 *.sln
 *.sw?
 
+# 브라우저 테스트의 산출물 (pnpm test:e2e)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # 로컬 환경값 (오리진·포트 등). .env 는 커밋한다 — 비밀 값이 아니다
 .env.local
 .env.*.local

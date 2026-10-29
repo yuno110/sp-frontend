@@ -3,7 +3,7 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { ERROR_SENTENCES, MY_PROFILE, UNEXPECTED } from '@/lib/api/errorCodes';
-import { ErrorBox, ErrorLine, Field, Input } from './ui';
+import { ErrorBox, ErrorLine, Field, Input, Select } from './ui';
 
 /**
  * 에러 표시가 서버의 답을 **버리지 않는지**를 잠근다.
@@ -118,13 +118,39 @@ describe('ErrorLine', () => {
 });
 
 describe('Field', () => {
-  it('그 필드의 오류를 입력칸과 같은 필드 안에 그린다', () => {
+  it('그 필드의 오류를 입력칸과 같은 필드 안에 그리고, 입력칸의 설명으로 잇는다', () => {
     render(
-      <Field label="제목" errors={['제목은 1~200자여야 합니다.']}>
+      <Field label="제목" hint="0 / 200" errors={['제목은 1~200자여야 합니다.']}>
         <Input />
       </Field>,
     );
-    const field = screen.getByLabelText('제목').closest('label')!.parentElement!;
-    expect(within(field).getByText('제목은 1~200자여야 합니다.')).toBeInTheDocument();
+    const input = screen.getByLabelText('제목');
+    expect(within(input.parentElement!).getByText('제목은 1~200자여야 합니다.')).toBeInTheDocument();
+    expect(input).toHaveAccessibleDescription('0 / 200 제목은 1~200자여야 합니다.');
+    expect(input).toBeInvalid();
+  });
+
+  it('입력칸의 이름은 라벨 글자뿐이다 — 함께 그린 버튼과 안내가 이름에 섞이지 않는다', () => {
+    render(
+      <Field label="이메일" hint="안내 문구">
+        <div>
+          <Input />
+          <button type="button">중복 확인</button>
+        </div>
+      </Field>,
+    );
+    expect(screen.getByRole('textbox')).toHaveAccessibleName('이메일');
+    expect(screen.getByRole('textbox')).not.toBeInvalid();
+  });
+
+  it('선택칸도 라벨이 가리킨다', () => {
+    render(
+      <Field label="대상">
+        <Select>
+          <option>하나</option>
+        </Select>
+      </Field>,
+    );
+    expect(screen.getByRole('combobox')).toHaveAccessibleName('대상');
   });
 });

@@ -105,7 +105,9 @@ export function MyPage() {
             <dl className="space-y-1.5 text-sm">
               <div className="flex gap-2">
                 <dt className="w-24 shrink-0 text-muted">이메일</dt>
-                <dd className="text-default">{account.data?.email ?? '…'}</dd>
+                {/* 이메일은 길 수 있고(sp-docs/requirements/member.md §2) 띄어쓰기가 없다 — 줄을 바꾸지 않으면 좁은 화면에서 가로로
+                    스크롤된다(F-05). */}
+                <dd className="text-default wrap-anywhere">{account.data?.email ?? '…'}</dd>
               </div>
               <div className="flex gap-2">
                 <dt className="w-24 shrink-0 text-muted">계정 생성</dt>

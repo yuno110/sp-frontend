@@ -3,7 +3,7 @@ import http from '@/lib/api/client';
 import { reissue } from '@/features/auth/api';
 import { decodeClaims, secondsUntilExpiry } from '@/lib/jwt';
 import { useAuthStore } from '@/stores/authStore';
-import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
+import { Button, ErrorBox, Field, Input, Panel, Select } from '@/components/ui';
 
 /**
  * 토큰 실험 — A001·A002·A003 의 경계를 눈으로 본다 (api-contract.md §8.5).
@@ -176,17 +176,13 @@ export function TokenLabPage() {
 
       <Panel title="요청 보내기">
         <Field label="대상">
-          <select
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            className="w-full rounded-md border border-line bg-elev px-2.5 py-1.5 text-sm"
-          >
+          <Select value={target} onChange={(e) => setTarget(e.target.value)}>
             {TARGETS.map((t) => (
               <option key={t.path} value={t.path}>
                 {t.label}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
 
         <div className="mt-3 space-y-2">

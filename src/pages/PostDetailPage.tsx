@@ -129,9 +129,11 @@ export function PostDetailPage() {
   return (
     <div className="space-y-4">
       <Panel>
+        {/* 띄어쓰기 없는 긴 낱말(붙여 넣은 주소)도 줄을 바꾼다(`wrap-anywhere`) — 안 바꾸면 본문 영역이 가로로
+            스크롤된다(F-05). 아래 본문과 댓글도 같다. */}
         <header className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-lg font-bold text-default">{post.data.title}</h1>
+            <h1 className="text-lg font-bold text-default wrap-anywhere">{post.data.title}</h1>
             <p className="mt-1 text-xs text-muted">
               <Link to={`/members/${post.data.writerId}`} className="hover:text-accent-600">
                 {post.data.writerNickname}
@@ -157,7 +159,7 @@ export function PostDetailPage() {
             ) : null}
           </div>
         </header>
-        <div className="mt-4 whitespace-pre-wrap border-t border-line-soft pt-4 text-sm text-default">
+        <div className="mt-4 whitespace-pre-wrap border-t border-line-soft pt-4 text-sm text-default wrap-anywhere">
           {post.data.content}
         </div>
       </Panel>
@@ -192,6 +194,7 @@ export function PostDetailPage() {
                         rows={2}
                         value={editDraft}
                         maxLength={COMMENT_CONTENT_MAX}
+                        aria-label="댓글 수정"
                         onChange={(e) => setEditDraft(e.target.value)}
                       />
                       <FieldErrors
@@ -209,7 +212,7 @@ export function PostDetailPage() {
                       </div>
                     </div>
                   ) : (
-                    <p className="mt-1 whitespace-pre-wrap text-sm text-default">{c.content}</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm text-default wrap-anywhere">{c.content}</p>
                   )}
                   {editing === c.id ? null : (
                     <div className="mt-1.5 flex gap-2 text-xs">

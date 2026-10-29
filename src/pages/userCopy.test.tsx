@@ -863,8 +863,8 @@ describe('오류 응답의 모양이 아닌 실패', () => {
 
 /* ───────── 필드 오류 ───────── */
 
-/** 입력칸 옆 — 그 입력칸을 감싼 필드. `Field` 안이면 label 의 부모, 아니면 입력칸의 부모다. */
-const beside = (input: Element) => input.closest('label')?.parentElement ?? input.parentElement!;
+/** 입력칸 옆 — 그 입력칸을 감싼 필드. `Field` 안이면 그 입력칸을 가리키는 label 의 부모, 아니면 입력칸의 부모다. */
+const beside = (input: Element) => (input as HTMLInputElement).labels?.[0]?.parentElement ?? input.parentElement!;
 /** 오류 상자(요약) — 그 문장을 담은 상자다. */
 const summaryOf = (sentence: string) => screen.getByText(sentence).parentElement!;
 

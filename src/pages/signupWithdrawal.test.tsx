@@ -163,8 +163,8 @@ const until = (texts: string[], el: () => Element = () => document.body) =>
   });
 const type = (el: Element, value: string) => fireEvent.change(el, { target: { value } });
 const codeShown = (code: string) => document.querySelector(`[data-error-code="${code}"]`);
-/** 입력칸 옆 — 그 입력칸을 감싼 `Field`. */
-const beside = (input: Element) => input.closest('label')!.parentElement!;
+/** 입력칸 옆 — 그 입력칸을 감싼 `Field`(그 입력칸을 가리키는 label 의 부모). */
+const beside = (input: Element) => (input as HTMLInputElement).labels![0].parentElement!;
 
 /* ───────── 가입 ───────── */
 

@@ -1,5 +1,14 @@
 import { clsx } from 'clsx';
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react';
+import {
+  createContext,
+  useContext,
+  useId,
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { describeError } from '@/lib/api/client';
 import type { Meanings, Recovery } from '@/lib/api/errorCodes';
@@ -37,20 +46,44 @@ export function Button({
   );
 }
 
+/**
+ * 포커스 표시(`outline`)를 지우지 않는다 — 브라우저가 그리는 표시가 Tab 으로 옮긴 자리를 보인다(F-05). 선 색
+ * (`focus:border-accent-500`)이 바뀌는 것만으로는 표시로 치지 않는다 — 검사가 보는 것은 `outline`·`box-shadow` 다
+ * (e2e/checks.ts 의 `focusVisible`).
+ */
 const FIELD_BASE =
-  'w-full rounded-md border border-line bg-elev px-2.5 py-1.5 text-sm text-default placeholder-faint focus:border-accent-500 focus:outline-none';
+  'w-full rounded-md border border-line bg-elev px-2.5 py-1.5 text-sm text-default placeholder-faint focus:border-accent-500';
+
+/** `Field` 가 그 입력칸에 주는 것 — 라벨이 가리키는 id, 안내와 오류를 읽히는 id, 오류가 있는가. */
+const FieldContext = createContext<{ id: string; describedBy: string | undefined; invalid: boolean } | null>(null);
+
+/** `Field` 안에 있으면 그 라벨·안내·오류에 이어진다. 밖에서 쓰면 이름은 쓰는 쪽이 준다(예: `aria-label`). */
+function useFieldProps() {
+  const field = useContext(FieldContext);
+  return field ? { id: field.id, 'aria-describedby': field.describedBy, 'aria-invalid': field.invalid || undefined } : {};
+}
 
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={clsx(FIELD_BASE, className)} {...rest} />;
+  const field = useFieldProps();
+  return <input {...field} className={clsx(FIELD_BASE, className)} {...rest} />;
 }
 
 export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={clsx(FIELD_BASE, 'resize-y', className)} {...rest} />;
+  const field = useFieldProps();
+  return <textarea {...field} className={clsx(FIELD_BASE, 'resize-y', className)} {...rest} />;
+}
+
+export function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+  const field = useFieldProps();
+  return <select {...field} className={clsx(FIELD_BASE, className)} {...rest} />;
 }
 
 /**
  * 입력칸 하나. `errors` 는 그 필드의 오류 메시지이고 입력칸 바로 아래에 그린다(lib/api/client.ts 의
  * `fieldMessages`). 그 필드를 요약에서 빼는 것은 같은 화면의 `ErrorBox` 의 `inlineFields` 다.
+ *
+ * **라벨은 `for` 로 입력칸을 가리키고 라벨 글자만 담는다**(F-05). 입력칸을 라벨로 감싸면 그 안의 안내 문구와 버튼(중복 확인)
+ * 글자까지 입력칸의 이름이 된다. 안내와 오류는 `aria-describedby` 로 입력칸에 잇는다 — 입력칸에 가면 함께 읽힌다.
  */
 export function Field({
   label,
@@ -63,25 +96,40 @@ export function Field({
   errors?: string[];
   children: ReactNode;
 }) {
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const errorsId = `${id}-errors`;
+  const describedBy = [hint ? hintId : null, errors.length > 0 ? errorsId : null].filter(Boolean).join(' ');
   return (
     <div>
-      <label className="block">
-        <span className="mb-1 block text-xs font-medium text-muted">{label}</span>
-        {children}
-        {hint ? <span className="mt-1 block text-xs text-faint">{hint}</span> : null}
+      <label htmlFor={id} className="mb-1 block text-xs font-medium text-muted">
+        {label}
       </label>
-      <FieldErrors messages={errors} />
+      <FieldContext.Provider value={{ id, describedBy: describedBy || undefined, invalid: errors.length > 0 }}>
+        {children}
+      </FieldContext.Provider>
+      {hint ? (
+        <p id={hintId} className="mt-1 text-xs text-faint">
+          {hint}
+        </p>
+      ) : null}
+      <FieldErrors id={errorsId} messages={errors} />
     </div>
   );
 }
 
 /** 필드 오류 메시지. `Field` 로 감싸지 않은 입력칸은 그 바로 아래에 이것을 둔다. */
-export function FieldErrors({ messages }: { messages: string[] }) {
-  return messages.map((message, i) => (
-    <p key={i} className="mt-1 text-xs text-danger-600">
-      {message}
-    </p>
-  ));
+export function FieldErrors({ id, messages }: { id?: string; messages: string[] }) {
+  if (messages.length === 0) return null;
+  return (
+    <div id={id}>
+      {messages.map((message, i) => (
+        <p key={i} className="mt-1 text-xs text-danger-600">
+          {message}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 export function Panel({

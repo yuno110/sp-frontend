@@ -103,7 +103,7 @@ export function PostListPage() {
         </div>
         <Button onClick={apply}>검색</Button>
         {applied ? (
-          <span className="text-xs text-faint">
+          <span className="text-xs text-faint wrap-anywhere">
             적용: {SEARCH_TYPE_LABEL[searchType]} / {applied}
           </span>
         ) : null}

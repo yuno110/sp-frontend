@@ -50,7 +50,9 @@ export function Layout() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-4 border-b border-line bg-elev px-6 py-3">
+      {/* 좁은 화면에서는 줄을 바꿔 쌓는다. 낱말 안에서는 줄을 바꾸지 않는다(`break-keep`) — 한글은 음절 사이에서 줄이 바뀌어
+          자리가 모자라면 메뉴 이름이 한 글자씩 선다(F-05 의 360px 측정). */}
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 break-keep border-b border-line bg-elev px-6 py-3">
         {/* 제품 이름. 링크로 두지 않는다 — 탐색의 「게시판」 링크와 글자도 가는 곳(/posts)도 같아 같은 링크가 둘이 된다. */}
         <span className="text-lg font-bold text-default">게시판</span>
 

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { cspPlugin } from './csp.ts';
@@ -28,9 +28,17 @@ export default defineConfig({
       '/api/v1/comments': { target: 'http://localhost:8082', changeOrigin: true },
     },
   },
+  // 브라우저 테스트가 프로덕션 빌드를 띄우는 자리다(playwright.config.ts). preview 는 `server.port` 를 물려받지 않으므로
+  // 3000 번을 여기에도 둔다 — 세 서비스의 CORS 오리진이다.
+  preview: {
+    port: 3000,
+    strictPort: true,
+  },
   test: {
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // 브라우저 테스트(e2e/)는 Playwright 가 돌린다(`pnpm test:e2e`).
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 });
