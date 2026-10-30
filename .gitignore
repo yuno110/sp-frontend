@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# 브라우저 테스트의 산출물 (pnpm test:e2e)
+# 브라우저 테스트의 산출물 (pnpm test:e2e·pnpm test:e2e:live)
 /test-results/
 /playwright-report/
 /blob-report/

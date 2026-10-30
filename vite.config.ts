@@ -38,7 +38,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    // 브라우저 테스트(e2e/)는 Playwright 가 돌린다(`pnpm test:e2e`).
+    // 브라우저 테스트(e2e/)는 Playwright 가 돌린다(`pnpm test:e2e`·`pnpm test:e2e:live`).
     exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 });

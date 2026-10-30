@@ -63,11 +63,13 @@ export const router = createBrowserRouter([
           </RequireToken>
         ),
       },
+      // 두 폼에 다른 key 를 준다 — 같은 자리라 key 가 없으면 기록으로 오갈 때 한 인스턴스를 쓰고, 수정 폼이 앞서 채운 글이라며
+      // 다시 채우지 않아 새 글에 쓰던 입력이 남는다(PostFormPage 는 고칠 글을 한 번만 채운다).
       {
         path: 'posts/new',
         element: (
           <RequireToken>
-            <PostFormPage mode="create" />
+            <PostFormPage key="create" mode="create" />
           </RequireToken>
         ),
       },
@@ -81,7 +83,7 @@ export const router = createBrowserRouter([
         path: 'posts/:id/edit',
         element: (
           <RequireToken>
-            <PostFormPage mode="edit" />
+            <PostFormPage key="edit" mode="edit" />
           </RequireToken>
         ),
       },

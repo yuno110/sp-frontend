@@ -8,9 +8,11 @@ import { defineConfig, devices } from '@playwright/test';
  * - 주소는 3000 번이다(vite.config.ts 의 `preview`). **이미 떠 있는 서버를 쓰지 않는다** — 3000 번에 개발 서버가 떠 있으면
  *   그것을 재게 되므로, 3000 번이 쓰이고 있으면 시작하지 않는다. 끝나면 띄운 서버를 내린다
  * - API 는 테스트가 스텁으로 답한다(e2e/api.ts). 백엔드는 띄우지 않는다
+ * - 실제 서비스를 치는 테스트(`e2e/live/`)는 집지 않는다 — 그쪽은 playwright.live.config.ts 가 돌린다
  */
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: '**/e2e/live/**',
   forbidOnly: true,
   // 브라우저 하나가 수백 MB 를 쓴다 — 기본값(CPU 코어의 절반)만큼 띄우지 않는다.
   workers: 2,
