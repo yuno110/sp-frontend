@@ -109,8 +109,9 @@ export const test = cspTest.extend<{ traffic: Traffic }>({
       const origin = new URL(baseURL).origin;
       const traffic = await Traffic.start(page);
       await use(traffic);
-      // 한 번에 본다 — CORS 가 막은 요청은 `failed` 에 걸리고, preflight 가 있는 요청이면 그 preflight 도 `disallowed` 에
-      // 걸린다. 막은 이유(상태·허용 오리진)는 그 preflight 에 있다. preflight 없이 가는 단순 요청은 `failed` 에만 걸린다.
+      // 한 번에 본다 — CORS 가 막은 요청은 `failed` 에 걸리고, 서비스가 preflight 를 거절했으면 그 preflight 도 `disallowed` 에
+      // 걸린다. 요청 헤더가 일부만 허용된 preflight 는 200 이고 여기서 허용 헤더를 보지 않으므로, 그 요청과 preflight 없이 가는
+      // 단순 요청은 `failed` 에만 걸린다.
       expect(
         { failed: traffic.failed, disallowed: traffic.preflights.filter((p) => !allowed(p, origin)) },
         '실패한 요청, 서비스가 허용하지 않은 preflight',
