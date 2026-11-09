@@ -14,6 +14,7 @@ export const ROUTES = [
   '/posts/new',
   '/posts',
   '/posts/me',
+  '/posts/me/edit',
   '/posts/:id',
   '/posts/:id/edit',
   '/members/me',

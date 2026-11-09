@@ -56,7 +56,7 @@ export function MyPostsPage() {
           <Pager page={query.data} onChange={setPage} />
         </>
       ) : query.data ? (
-        <Empty>쓴 글이 없다</Empty>
+        <Empty>쓴 글이 없습니다</Empty>
       ) : null}
     </div>
   );

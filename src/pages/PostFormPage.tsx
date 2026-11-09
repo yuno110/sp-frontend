@@ -3,7 +3,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { createPost, getPost, updatePost } from '@/features/board/api';
 import { POST_CONTENT_MAX, TITLE_MAX } from '@/features/board/types';
+import { useNoProfileMeanings } from '@/features/member/useNoProfileMeanings';
 import { fieldMessages } from '@/lib/api/client';
+import { useMounted } from '@/lib/useMounted';
 import { Button, Empty, ErrorBox, Field, Input, Panel, Textarea } from '@/components/ui';
 
 /** 입력칸 옆에 오류를 그리는 필드. 나머지 필드의 오류는 요약에 남는다. */
@@ -20,12 +22,14 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
   const { id } = useParams();
   const postId = id ?? '';
   const navigate = useNavigate();
+  const mounted = useMounted();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   /** 입력칸을 채운 글의 id. */
   const [filledFor, setFilledFor] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const errorMeanings = useNoProfileMeanings(error);
 
   const existing = useQuery({
     queryKey: ['post', postId],
@@ -53,7 +57,7 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
         mode === 'create'
           ? await createPost(title, content)
           : await updatePost(postId, title, content);
-      navigate(`/posts/${saved.id}`);
+      if (mounted.current) navigate(`/posts/${saved.id}`);
     } catch (e) {
       setError(e);
     } finally {
@@ -91,7 +95,7 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
       >
         <Field
           label="제목"
-          hint={`${title.length} / ${TITLE_MAX} · 공백만으로 채울 수 없다`}
+          hint={`${title.length} / ${TITLE_MAX} · 공백만으로 채울 수 없습니다`}
           errors={fieldMessages(error, 'title')}
         >
           <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={TITLE_MAX} />
@@ -108,14 +112,15 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
             maxLength={POST_CONTENT_MAX}
           />
         </Field>
-        <ErrorBox error={error} inlineFields={INLINE_FIELDS} />
-        <div className="flex items-center gap-2">
+        <ErrorBox error={error} meanings={errorMeanings} inlineFields={INLINE_FIELDS} />
+        {/* 좁은 폭에서는 안내를 다음 줄로 넘긴다 — 한 줄에 두면 버튼이 눌려 글자가 쪼개진다. */}
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" variant="primary" disabled={busy}>
             {busy ? '보내는 중…' : mode === 'create' ? '등록' : '저장'}
           </Button>
           <Button onClick={() => navigate(-1)}>취소</Button>
           {mode === 'create' ? (
-            <span className="text-xs text-faint">작성에는 프로필이 필요하다</span>
+            <span className="text-xs text-faint">작성에는 프로필이 필요합니다</span>
           ) : null}
         </div>
       </form>

@@ -11,7 +11,7 @@ import {
 } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { describeError } from '@/lib/api/client';
-import type { Meanings, Recovery } from '@/lib/api/errorCodes';
+import { AFTER_WITHDRAWAL, type Meanings, type Recovery } from '@/lib/api/errorCodes';
 import { DEV_ONLY } from '@/lib/devOnly';
 
 /**
@@ -159,9 +159,10 @@ export function Panel({
 const RECOVERY: Record<Recovery, { to: string; label: string }> = {
   profile: { to: '/signup/profile', label: '프로필 등록하기' },
   login: { to: '/login', label: '로그인하기' },
+  signup: { to: '/signup', label: '새 계정 만들기' },
 };
 
-function RecoveryLink({ recovery, className }: { recovery: Recovery; className?: string }) {
+export function RecoveryLink({ recovery, className }: { recovery: Recovery; className?: string }) {
   const { to, label } = RECOVERY[recovery];
   // 이미 그 화면이면 두지 않는다 — 로그인 화면이 세션을 끝낸 실패를 보일 때가 그렇다.
   const here = useLocation().pathname === to;
@@ -245,6 +246,32 @@ export function ErrorLine({ error, meanings }: { error: unknown; meanings?: Mean
       ) : null}
       {DEV_ONLY && view.detail ? <span className="font-mono text-xs"> {view.detail}</span> : null}
     </span>
+  );
+}
+
+/**
+ * 세션이 끝났다는 안내 — 그 실패(`authStore` 의 `sessionFailure`)를 보이는 자리가 쓴다. 로그인 화면과, 공개 화면의 머리글 아래다.
+ * 계정 탈퇴가 끝나고 프로필 탈퇴가 남은 채로 끝났으면 다시 시도할 수 없다는 것을 보이고 다시 로그인하라고 하지 않는다
+ * (`AFTER_WITHDRAWAL`).
+ */
+export function SessionEnded({
+  failure,
+  afterWithdrawal = false,
+  className,
+}: {
+  failure: unknown;
+  afterWithdrawal?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={clsx('space-y-2', className)}>
+      <p className="text-sm text-default">
+        {afterWithdrawal
+          ? '계정은 탈퇴했지만 프로필 탈퇴를 마치지 못했습니다. 로그인 상태가 끝나 다시 시도할 수 없습니다.'
+          : '로그인 상태를 이어가지 못했습니다.'}
+      </p>
+      <ErrorBox error={failure} meanings={afterWithdrawal ? AFTER_WITHDRAWAL : undefined} />
+    </div>
   );
 }
 

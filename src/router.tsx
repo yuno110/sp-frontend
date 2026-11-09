@@ -1,6 +1,6 @@
 import { Navigate, createBrowserRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import { Layout } from '@/components/Layout';
+import { Layout, type RouteHandle } from '@/components/Layout';
 import { LoginPage } from '@/pages/LoginPage';
 import { SignupPage, SignupProfilePage } from '@/pages/SignupPage';
 import { PostListPage } from '@/pages/PostListPage';
@@ -30,6 +30,9 @@ function RequireToken({ children }: { children: ReactNode }) {
   return accessToken ? children : <Navigate to="/login" replace />;
 }
 
+/** 토큰이 비어도 머무는 화면(`RequireToken` 밖의 화면)이 단다 — 세션이 끝난 이유를 그 자리에서 보인다(components/Layout.tsx). */
+const PUBLIC_SCREEN: RouteHandle = { showsSessionFailure: true };
+
 /**
  * /posts/mine 과 /posts/new 가 /posts/:id 보다 먼저 선언되어 있다. 라우터는 리터럴을
  * 먼저 보므로 순서와 무관하지만, 서버의 SecurityConfig 는 선언 순서대로 평가한다
@@ -44,7 +47,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/posts" replace /> },
       { path: 'login', element: <LoginPage /> },
-      { path: 'signup', element: <SignupPage /> },
+      { path: 'signup', element: <SignupPage />, handle: PUBLIC_SCREEN },
       // 프로필 등록은 인증 요청이다. 공개 경로로 두면 새로고침 복원이 끝나기 전에 제출해 401 A001 이 난다 — 보호된
       // 경로라 복원이 끝날 때까지 그리지 않는다.
       {
@@ -73,12 +76,14 @@ export const router = createBrowserRouter([
           </RequireToken>
         ),
       },
-      { path: 'posts', element: <PostListPage /> },
+      { path: 'posts', element: <PostListPage />, handle: PUBLIC_SCREEN },
       // 서버의 `GET /api/v1/posts/me` 와 같은 꼴을 주소창에 치는 경우를 먼저 잡는다.
       // 잡지 않으면 `posts/:id` 가 `me` 를 글 id 로 받아 **목록 응답을 상세로 그린다** —
       // 200 이라 오류도 뜨지 않고 제목·본문이 빈 화면이 된다(불변식 9 성격).
       { path: 'posts/me', element: <Navigate to="/posts/mine" replace /> },
-      { path: 'posts/:id', element: <PostDetailPage /> },
+      { path: 'posts/:id', element: <PostDetailPage />, handle: PUBLIC_SCREEN },
+      // `posts/me` 와 같은 함정이다 — `posts/:id/edit` 이 `me` 를 글 id 로 받아 **목록 응답을 글로 읽고 빈 수정 폼을 그린다.**
+      { path: 'posts/me/edit', element: <Navigate to="/posts/mine" replace /> },
       {
         path: 'posts/:id/edit',
         element: (
@@ -90,7 +95,7 @@ export const router = createBrowserRouter([
       // `members/me` 도 같은 이유로 먼저 잡는다 — 서버의 `GET /api/v1/members/me` 는
       // 2키(`MyProfile`)이고 이 화면이 기대하는 것은 4키(`PublicProfile`)다.
       { path: 'members/me', element: <Navigate to="/me" replace /> },
-      { path: 'members/:accountId', element: <MemberProfilePage /> },
+      { path: 'members/:accountId', element: <MemberProfilePage />, handle: PUBLIC_SCREEN },
       {
         path: 'me',
         element: (
@@ -100,7 +105,7 @@ export const router = createBrowserRouter([
         ),
       },
       // 개발 빌드에서만 있다. 프로덕션 빌드에서는 이 경로가 아래 `*` 에 걸려 목록으로 간다.
-      ...(DEV_ONLY ? [{ path: 'tokens', element: <TokenLabPage /> }] : []),
+      ...(DEV_ONLY ? [{ path: 'tokens', element: <TokenLabPage />, handle: PUBLIC_SCREEN }] : []),
       { path: '*', element: <Navigate to="/posts" replace /> },
     ],
   },

@@ -2,11 +2,10 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import { login } from '@/features/auth/api';
-import { AFTER_WITHDRAWAL } from '@/lib/api/errorCodes';
 import { withoutRequestBody } from '@/lib/api/withoutRequestBody';
 import { DEV_ONLY } from '@/lib/devOnly';
-import { useAuthStore } from '@/stores/authStore';
-import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
+import { beginLogin, useAuthStore } from '@/stores/authStore';
+import { Button, ErrorBox, Field, Input, Panel, SessionEnded } from '@/components/ui';
 
 /**
  * 로그인. **400 이 없다** — 누락·빈 값·형식 오류도 401 `AU003` 이다(api-contract.md §2.1).
@@ -46,20 +45,28 @@ export function LoginPage() {
     const s = useAuthStore.getState();
     return s.accessToken === null ? s.withdrawal : null;
   });
+  // 클로저가 아니라 스토어를 다시 읽는다 — 이 값은 `'account'` 에서 `'done'` 으로 나아간다. 화면이 그려지고 이 효과가 돌기 전에 프로필
+  // 탈퇴가 끝날 수 있고, 클로저의 값을 보이고 지우면 끝났다는 사실이 사라진다.
   useEffect(() => {
-    if (withdrawal === null) return;
-    setWithdrawn(withdrawal);
-    useAuthStore.getState().setWithdrawal(null);
+    const s = useAuthStore.getState();
+    const latest = s.accessToken === null ? s.withdrawal : null;
+    if (latest === null) return;
+    setWithdrawn(latest);
+    s.setWithdrawal(null);
   }, [withdrawal]);
 
   const submit = async () => {
+    const latest = beginLogin();
     setBusy(true);
     setError(null);
     setEnded(null);
     setSignedUp(null);
     setWithdrawn(null);
     try {
-      setTokens(await login(email, password));
+      const tokens = await login(email, password);
+      // 그 사이 다른 로그인이나 가입을 시작했으면 이 응답은 세션이 되지 않는다 — 이 화면은 이미 내려갔다.
+      if (!latest()) return;
+      setTokens(tokens);
       navigate('/posts');
     } catch (e) {
       // 쥐는 것은 요청 본문을 비운 사본이다 — 로그인 본문에는 비밀번호가 있다.
@@ -72,24 +79,15 @@ export function LoginPage() {
   return (
     <div className="mx-auto max-w-md">
       <Panel title="로그인">
+        {/* 한 자리에 하나다. 프로필 탈퇴가 그 뒤에 끝날 수 있다 — 끝났으면 탈퇴했다는 것만 보인다. 세션을 끝낸 실패는 더 할 일이 없다. */}
         {withdrawn === 'done' ? (
           <p className="mb-3 rounded-md border border-line bg-success-50 px-3 py-2 text-sm text-success-600">
             탈퇴했습니다.
           </p>
-        ) : null}
-        {withdrawn === 'account' ? (
-          // 계정 탈퇴 뒤에 로그인 상태가 끝났다. 끝낸 실패가 있으면 함께 보이되 다시 로그인하라고 하지 않는다(AFTER_WITHDRAWAL).
-          <div className="mb-3 space-y-2">
-            <p className="text-sm text-default">
-              계정은 탈퇴했지만 프로필 탈퇴를 마치지 못했습니다. 로그인 상태가 끝나 다시 시도할 수 없습니다.
-            </p>
-            <ErrorBox error={ended} meanings={AFTER_WITHDRAWAL} />
-          </div>
+        ) : withdrawn === 'account' ? (
+          <SessionEnded failure={ended} afterWithdrawal className="mb-3" />
         ) : ended != null ? (
-          <div className="mb-3 space-y-2">
-            <p className="text-sm text-default">로그인 상태를 이어가지 못했습니다.</p>
-            <ErrorBox error={ended} />
-          </div>
+          <SessionEnded failure={ended} className="mb-3" />
         ) : null}
         {signedUp != null ? (
           <div className="mb-3 space-y-2">

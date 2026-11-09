@@ -6,14 +6,14 @@ import { formatDateTime } from '@/lib/format';
 /**
  * 목록 항목에는 content 가 없다 — 크기 때문이다 (api-contract.md §4.3).
  *
- * **좁은 화면(`sm` 아래)에서는 표 대신 줄 목록을 그린다**(F-05). 표는 360px 폭에 들어가지 않는다 — 긴 제목이면 본문 영역을
- * 가로로 넘치고, 제목이 줄을 바꾸게 해도 칸이 좁아져 표 머리 글자가 한 자씩 선다(F-05 측정). 줄 목록은 번호를 빼고 나머지 값을
- * 담는다. 화면 폭에 따라 둘 중 하나만 보인다.
+ * **좁은 화면(`md` 아래)에서는 표 대신 줄 목록을 그린다**(F-05). 표는 360px 폭에 들어가지 않는다 — 긴 제목이면 본문 영역을
+ * 가로로 넘치고, 제목이 줄을 바꾸게 해도 칸이 좁아져 표 머리 글자가 한 자씩 선다(F-05 측정). 다른 열의 폭이 정해져 있어 640px 에서는
+ * 제목 칸이 111px 까지 좁아졌다(측정). 줄 목록은 번호를 빼고 나머지 값을 담는다. 화면 폭에 따라 둘 중 하나만 보인다.
  */
 export function PostTable({ items }: { items: PostListItem[] }) {
   return (
     <>
-      <table className="hidden w-full border-collapse overflow-hidden rounded-md border border-line bg-elev text-sm sm:table">
+      <table className="hidden w-full border-collapse overflow-hidden rounded-md border border-line bg-elev text-sm md:table">
         <thead>
           <tr className="border-b border-line bg-subtle text-left text-xs text-muted">
             <th className="w-16 px-3 py-2 text-center">번호</th>
@@ -58,7 +58,7 @@ export function PostTable({ items }: { items: PostListItem[] }) {
         </tbody>
       </table>
 
-      <ul className="divide-y divide-[var(--color-line-soft)] rounded-md border border-line bg-elev text-sm sm:hidden">
+      <ul className="divide-y divide-[var(--color-line-soft)] rounded-md border border-line bg-elev text-sm md:hidden">
         {items.map((item) => (
           <li key={item.id} className="px-3 py-2.5">
             <Link to={`/posts/${item.id}`} className="text-default wrap-anywhere hover:text-accent-600">

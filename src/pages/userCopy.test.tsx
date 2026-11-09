@@ -1,9 +1,10 @@
 import { StrictMode } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE, UNEXPECTED } from '@/lib/api/errorCodes';
+import { ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE, UNEXPECTED, WITHDRAWN_PROFILE } from '@/lib/api/errorCodes';
 import { internalCopyIn, visibleCopy } from '@/test/internalCopy';
+import { plainEndingsIn } from '@/test/plainEnding';
 import indexHtml from '../../index.html?raw';
 
 /**
@@ -38,11 +39,13 @@ type FieldErrors = Array<{ field: string; message: string }>;
 /** 서버가 코드마다 내는 메시지 (sp-docs/api-contract.md §8). 화면이 무엇을 대신 보여주는지 보려고 그대로 싣는다. */
 const SERVER_MESSAGE: Record<string, string> = {
   C001: '잘못된 입력값입니다.',
+  C004: '요청한 리소스를 찾을 수 없습니다.',
   C005: '서버 내부 오류가 발생했습니다.',
   A001: '인증이 필요합니다.',
   A002: '유효하지 않은 토큰입니다.',
   A003: '만료된 토큰입니다.',
   M001: '프로필을 찾을 수 없습니다.',
+  M007: '탈퇴한 프로필입니다.',
   P001: '게시글을 찾을 수 없습니다.',
   CM002: '댓글에 대한 권한이 없습니다.',
   S001: '일시적으로 서비스 연동에 실패했습니다.',
@@ -95,6 +98,16 @@ const BASE: Routes = {
 
 /** 프로필 등록 전의 계정 — `GET /members/me` 가 404 `M001` 이다(api-contract.md §3). */
 const NO_PROFILE: Routes = { 'GET /api/v1/members/me': () => fail(404, 'M001') };
+
+/**
+ * 탈퇴한 프로필의 계정 — `GET /members/me` 는 프로필이 없을 때와 같은 404 `M001` 이고, 가르는 것은 공개 조회의 `deleted` 다
+ * (api-contract.md §3.1).
+ */
+const WITHDRAWN_PROFILE_ROUTES: Routes = {
+  ...NO_PROFILE,
+  'GET /api/v1/members/7': () =>
+    ok({ accountId: 7, nickname: '탈퇴한 회원', createdAt: '2026-10-01T09:00:00', deleted: true }),
+};
 
 let routes: Routes = {};
 const requests: string[] = [];
@@ -189,6 +202,7 @@ const commentItem = () => screen.getByText(COMMENT.content).closest('li')!;
 const commentDraft = () => main().querySelector('form textarea')!;
 
 const hits = () => internalCopyIn(visibleCopy(document.body));
+const plainEndings = () => plainEndingsIn(visibleCopy(document.body));
 const codeShown = (code: string) => document.querySelector(`[data-error-code="${code}"]`);
 
 beforeEach(() => {
@@ -240,6 +254,28 @@ const SIGNUP_ROUTES: Routes = {
   'POST /api/v1/auth/login': () =>
     ok({ grantType: 'Bearer', accessToken: tokenOf(ME), refreshToken: 'RT-1', accessTokenExpiresIn: 1800 }),
   ...NO_PROFILE,
+};
+
+/**
+ * 계정 생성의 답을 로그아웃에 실패로 답할 때까지 미룬다 — 그 사이에 누른 로그아웃이 가입을 멈추고, 실패해서 가입 화면에 남는다. 답한 뒤에는
+ * 다시 미룬다 — 같은 모듈에서 이 상태를 다시 돌려도(재시도) 로그아웃을 기다린다.
+ */
+let releaseAccount!: () => void;
+let logoutFailed!: Promise<void>;
+const holdAccount = () => {
+  logoutFailed = new Promise<void>((resolve) => (releaseAccount = resolve));
+};
+holdAccount();
+const STOPPED_SIGNUP_ROUTES: Routes = {
+  'POST /api/v1/accounts': async () => {
+    await logoutFailed;
+    holdAccount();
+    return ok({ accountId: 8, email: 'new@example.com' });
+  },
+  'POST /api/v1/auth/logout': () => {
+    releaseAccount();
+    return fail(500, 'C005');
+  },
 };
 
 /* ───────── 화면마다 보이는 문구 ───────── */
@@ -492,7 +528,7 @@ const COPY_STATES: CopyState[] = [
     ready: async () => {
       type(screen.getByLabelText(/^이메일/), 'new@example.com');
       fireEvent.click(screen.getByRole('button', { name: '중복 확인' }));
-      await until(['쓸 수 있']);
+      await until(['쓸 수 있는 이메일입니다']);
     },
   },
   {
@@ -502,7 +538,7 @@ const COPY_STATES: CopyState[] = [
     ready: async () => {
       type(screen.getByLabelText(/^이메일/), 'user@example.com');
       fireEvent.click(screen.getByRole('button', { name: '중복 확인' }));
-      await until(['이미 쓰이고']);
+      await until(['이미 쓰이고 있는 이메일입니다']);
     },
   },
   {
@@ -517,6 +553,19 @@ const COPY_STATES: CopyState[] = [
     },
   },
   {
+    name: '가입 — 계정을 만들었지만 기다리는 사이에 누른 로그아웃이 실패해 이어서 로그인하지 않음',
+    path: '/signup',
+    as: ME,
+    extra: STOPPED_SIGNUP_ROUTES,
+    ready: async () => {
+      await until(['테스트닉'], banner);
+      submitAccount();
+      fireEvent.click(within(banner()).getByRole('button', { name: /로그아웃/ }));
+      await until(['계정을 만들었습니다.', '로그인하기'], main);
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('로그아웃하지 못했습니다.'));
+    },
+  },
+  {
     name: '가입 — 프로필 단계, 닉네임 중복 확인',
     path: '/signup',
     extra: { ...SIGNUP_ROUTES, 'GET /api/v1/members/check-nickname': () => ok({ available: true }) },
@@ -524,7 +573,7 @@ const COPY_STATES: CopyState[] = [
       await signupToProfileStep();
       type(screen.getByLabelText(/^닉네임/), '새닉');
       fireEvent.click(screen.getByRole('button', { name: '중복 확인' }));
-      await until(['쓸 수 있']);
+      await until(['쓸 수 있는 닉네임입니다']);
       // 머리글의 프로필 조회가 그려질 때까지. 프로필 등록 화면에서는 그리로 가는 링크를 두지 않는다(components/ui.tsx).
       await until([MY_PROFILE.M001.text], banner);
     },
@@ -561,6 +610,85 @@ const COPY_STATES: CopyState[] = [
         }),
       ]),
   },
+  {
+    name: '목록 — 등록된 글이 없음',
+    path: '/posts',
+    extra: { 'GET /api/v1/posts': () => ok(pageOf([])) },
+    ready: () => until(['등록된 게시글이 없습니다'], main),
+  },
+  {
+    name: '목록 — 검색 결과가 없음',
+    path: '/posts',
+    extra: { 'GET /api/v1/posts': () => ok(pageOf([])) },
+    ready: async () => {
+      await until(['등록된 게시글이 없습니다'], main);
+      type(screen.getByLabelText('검색어'), '없는 낱말');
+      fireEvent.click(screen.getByRole('button', { name: '검색' }));
+      await until(['검색 결과가 없습니다'], main);
+    },
+  },
+  {
+    name: '내 글 — 쓴 글이 없음',
+    path: '/posts/mine',
+    as: ME,
+    extra: { 'GET /api/v1/posts/me': () => ok(pageOf([])) },
+    ready: () => until(['쓴 글이 없습니다'], main),
+  },
+  {
+    name: '글 상세 — 댓글이 없음',
+    path: '/posts/1',
+    extra: { 'GET /api/v1/posts/1/comments': () => ok(pageOf([])) },
+    ready: () => until(['댓글이 없습니다'], main),
+  },
+  {
+    name: '머리글 — 로그아웃하지 못함',
+    path: '/posts',
+    as: ME,
+    extra: { 'POST /api/v1/auth/logout': () => fail(500, 'C005') },
+    ready: async () => {
+      await until(['테스트닉'], banner);
+      fireEvent.click(within(banner()).getByRole('button', { name: /로그아웃/ }));
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('로그아웃하지 못했습니다.'));
+    },
+  },
+  {
+    name: '머리글 아래 — 공개 화면에서 세션이 끝남',
+    path: '/posts',
+    as: ME,
+    extra: {
+      'GET /api/v1/members/me': () => fail(401, 'A003'),
+      'POST /api/v1/auth/reissue': () => fail(401, 'A002'),
+    },
+    ready: () => waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('로그인 상태를 이어가지 못했습니다.')),
+  },
+  {
+    name: '마이페이지 — 탈퇴한 프로필',
+    path: '/me',
+    as: ME,
+    extra: WITHDRAWN_PROFILE_ROUTES,
+    ready: () => waitFor(() => expect(linksTo('/signup', main())).toHaveLength(1)),
+  },
+  {
+    name: '글쓰기 — 탈퇴한 프로필',
+    path: '/posts/new',
+    as: ME,
+    extra: { ...WITHDRAWN_PROFILE_ROUTES, 'POST /api/v1/posts': () => fail(403, 'S002') },
+    ready: async () => {
+      await until(['새 글']);
+      fireEvent.submit(main().querySelector('form')!);
+      await waitFor(() => expect(linksTo('/signup', main())).toHaveLength(1));
+    },
+  },
+  {
+    name: '프로필 등록 — 탈퇴한 프로필은 다시 등록할 수 없음',
+    path: '/signup/profile',
+    as: ME,
+    extra: { ...NO_PROFILE, 'POST /api/v1/members': () => fail(409, 'M007') },
+    ready: async () => {
+      fireEvent.submit(main().querySelector('form')!);
+      await waitFor(() => expect(linksTo('/signup', main())).toHaveLength(1));
+    },
+  },
 ];
 
 describe('화면마다 보이는 문구', () => {
@@ -569,6 +697,8 @@ describe('화면마다 보이는 문구', () => {
     await ready();
 
     expect(hits()).toEqual([]);
+    // 프로덕션 화면의 문장은 「~다」 체로 끝나지 않는다(CLAUDE.md 「화면 문구와 오류 표시」).
+    expect(plainEndings()).toEqual([]);
   });
 });
 
@@ -641,6 +771,121 @@ describe('복구 안내', () => {
 
     expect(linksTo('/signup/profile', main())).toHaveLength(1);
     expect(codeShown('S002')).toBeVisible();
+  });
+
+  /**
+   * 탈퇴한 프로필은 다시 등록할 수 없다(409 `M007`, api-contract.md §3). `M001`·`S002` 만으로는 미등록과 갈리지 않으므로 화면이
+   * 공개 조회의 `deleted` 를 묻는다(§3.1). 답을 받기 전이나 받지 못했으면 지금까지의 안내를 쓴다 — 미등록이 훨씬 흔하고, 등록을
+   * 눌러도 `M007` 의 안내가 잇는다.
+   */
+  describe('탈퇴한 프로필', () => {
+    it('마이페이지와 머리글 — 프로필 등록으로 보내지 않고 새 계정으로 안내한다. 코드는 남는다', async () => {
+      await renderApp('/me', { as: ME, extra: WITHDRAWN_PROFILE_ROUTES });
+      await waitFor(() => expect(main().querySelector('[data-error-code="M001"]')).toBeVisible());
+
+      await waitFor(() => expect(linksTo('/signup/profile')).toEqual([]));
+      expect(main()).not.toHaveTextContent(MY_PROFILE.M001.text);
+      expect(banner()).not.toHaveTextContent(MY_PROFILE.M001.text);
+      expect(main()).toHaveTextContent(WITHDRAWN_PROFILE.M001.text);
+      expect(linksTo('/signup', main())).toHaveLength(1);
+      expect(linksTo('/signup', banner())).toHaveLength(1);
+      expect(banner().querySelector('[data-error-code="M001"]')).toBeVisible();
+    });
+
+    it.each([
+      ['글쓰기', '/posts/new', { 'POST /api/v1/posts': () => fail(403, 'S002') }, () => fireEvent.submit(main().querySelector('form')!)],
+      [
+        '댓글 작성',
+        '/posts/1',
+        { 'POST /api/v1/posts/1/comments': () => fail(403, 'S002') },
+        async () => {
+          await until([COMMENT.content]);
+          type(commentDraft(), '새 댓글');
+          fireEvent.submit(commentDraft().closest('form')!);
+        },
+      ],
+    ] as const)('%s 의 S002 — 프로필 등록으로 보내지 않고 새 계정으로 안내한다', async (_, path, extra, act) => {
+      await renderApp(path, {
+        as: ME,
+        extra: { ...extra, 'GET /api/v1/members/7': WITHDRAWN_PROFILE_ROUTES['GET /api/v1/members/7'] },
+      });
+      await until(['테스트닉'], banner);
+      await act();
+      await waitFor(() => expect(codeShown('S002')).toBeVisible());
+
+      await waitFor(() => expect(linksTo('/signup/profile')).toEqual([]));
+      expect(main()).not.toHaveTextContent(ERROR_SENTENCES.S002.text);
+      expect(main()).toHaveTextContent(WITHDRAWN_PROFILE.S002.text);
+      expect(linksTo('/signup', main())).toHaveLength(1);
+    });
+
+    it('S002 실패가 남은 글 상세에서 세션이 끝나면 — 계정 번호 없이 공개 조회를 묻지 않는다', async () => {
+      await renderApp('/posts/1', {
+        as: ME,
+        extra: {
+          'POST /api/v1/posts/1/comments': () => fail(403, 'S002'),
+          'GET /api/v1/members/7': WITHDRAWN_PROFILE_ROUTES['GET /api/v1/members/7'],
+        },
+      });
+      await until(['테스트닉'], banner);
+      await until([COMMENT.content]);
+      type(commentDraft(), '새 댓글');
+      fireEvent.submit(commentDraft().closest('form')!);
+      await waitFor(() => expect(codeShown('S002')).toBeVisible());
+      await waitFor(() => expect(requests).toContain('GET /api/v1/members/7'));
+      const { useAuthStore } = await import('@/stores/authStore');
+
+      act(() => useAuthStore.getState().clear());
+
+      // 그 자리에 머문 화면이 토큰 없이 다시 물어 다 그렸다. 실패 안내는 남아 있다 — 그 코드로 뜻을 고르는 조회가 살아 있다.
+      await until([COMMENT.content]);
+      await waitFor(() => expect(within(banner()).getByRole('link', { name: '로그인' })).toBeInTheDocument());
+      expect(codeShown('S002')).toBeVisible();
+      expect(requests.filter((key) => key.startsWith('GET /api/v1/members/n'))).toEqual([]);
+    });
+
+    it.each([
+      ['없음(404 M001)', () => fail(404, 'M001')],
+      ['탈퇴가 아님', () => ok({ accountId: 7, nickname: '테스트닉', createdAt: '2026-10-01T09:00:00', deleted: false })],
+      ['응답 없음', (): Reply => 'no-response'],
+      ['서버 오류', () => fail(500, 'C005')],
+    ] as const)('공개 조회의 답이 %s 이면 — 미등록의 안내를 쓴다', async (_, reply) => {
+      await renderApp('/me', { as: ME, extra: { ...NO_PROFILE, 'GET /api/v1/members/7': reply } });
+      await until([MY_PROFILE.M001.text], main);
+      await waitFor(() => expect(requests).toContain('GET /api/v1/members/7'));
+
+      expect(linksTo('/signup/profile', main())).toHaveLength(1);
+      expect(linksTo('/signup')).toEqual([]);
+    });
+
+    it('프로필이 있으면 — 공개 조회를 더 부르지 않는다', async () => {
+      await renderApp('/posts', { as: ME });
+      await until(['테스트닉'], banner);
+      await until([POST.title], main);
+
+      expect(requests).not.toContain('GET /api/v1/members/7');
+    });
+
+    it('남의 프로필 조회의 M001 은 내 프로필의 일이 아니다 — 내 프로필을 공개 조회로 묻지 않는다', async () => {
+      await renderApp('/members/99', { as: ME, extra: { 'GET /api/v1/members/99': () => fail(404, 'M001') } });
+      await until([ERROR_SENTENCES.M001.text], main);
+      await until(['테스트닉'], banner);
+
+      expect(requests).not.toContain('GET /api/v1/members/7');
+    });
+
+    it('등록이 M007 이면 — 막다른 길이 아니다. 새 계정으로 가는 길을 보이고 코드를 남긴다', async () => {
+      await renderApp('/signup/profile', {
+        as: ME,
+        extra: { ...NO_PROFILE, 'POST /api/v1/members': () => fail(409, 'M007') },
+      });
+      fireEvent.submit(main().querySelector('form')!);
+
+      await waitFor(() => expect(codeShown('M007')).toBeVisible());
+      expect(linksTo('/signup', main())).toHaveLength(1);
+      expect(main()).toHaveTextContent(ERROR_SENTENCES.M007.text);
+      expect(hits()).toEqual([]);
+    });
   });
 
   it.each(['A001', 'A002'])('%s — 로그인으로', async (code) => {
@@ -787,6 +1032,128 @@ describe('보호된 화면에서 세션이 끝나 로그인으로 갈 때', () =
     await until(['계정이 없으면'], main);
 
     expect(main()).not.toHaveTextContent(ENDED);
+  });
+});
+
+/**
+ * 공개 화면은 토큰이 비어도 로그인으로 가지 않는다 — 머리글 요청만으로 세션이 끝나면 이유를 보일 화면이 없어 다음 로그인 화면
+ * 방문에야 보였다. 그 자리의 머리글 아래에서 보인다. 머리글의 로그인 칸과 본문은 그 실패로 바뀌는 자리라 그 안에 두지 않는다.
+ */
+describe('공개 화면에서 세션이 끝날 때', () => {
+  const ENDED = '로그인 상태를 이어가지 못했습니다.';
+  const notice = () => screen.getByRole('alert');
+  const ended = () => waitFor(() => expect(notice()).toHaveTextContent(ENDED));
+
+  /** 머리글 요청만으로 세션이 끝난다 — 화면은 공개 화면이고 다른 요청은 성공한다. */
+  const HEADER_ENDS_SESSION: Routes = {
+    'GET /api/v1/members/me': () => fail(401, 'A003'),
+    'POST /api/v1/auth/reissue': () => fail(401, 'A002'),
+  };
+
+  it.each([
+    ['목록', '/posts', [POST.title]],
+    ['글 상세', '/posts/1', [POST.content]],
+    ['작성자 프로필', '/members/7', ['테스트닉']],
+    ['가입', '/signup', ['계정 만들기']],
+  ])('%s — 새로고침 복원이 거부되면 화면을 그대로 두고 그 자리에서 이유를 보인다', async (_, path, drawn) => {
+    await loggedInOnPreviousPage();
+    await renderApp(path, { strict: true, extra: { 'POST /api/v1/auth/reissue': () => fail(401, 'A002') } });
+
+    await ended();
+    await until(drawn, main);
+    expect(notice()).toHaveTextContent(ERROR_SENTENCES.A002.text);
+    expect(within(notice()).getByText('A002')).toBeVisible();
+    expect(within(notice()).getByRole('link', { name: '로그인하기' })).toHaveAttribute('href', '/login');
+    expect(window.location.pathname).toBe(path);
+    expect(hits()).toEqual([]);
+    expect(plainEndings()).toEqual([]);
+  });
+
+  it('머리글 요청만으로 끝나도 — 그 자리에서 보인다. 그 실패가 바꾸는 머리글의 칸과 본문 밖이다', async () => {
+    await renderApp('/posts', { as: ME, strict: true, extra: HEADER_ENDS_SESSION });
+
+    await ended();
+    expect(notice()).toHaveTextContent(ERROR_SENTENCES.A003.text);
+    expect(within(notice()).getByText('A003')).toBeVisible();
+    expect(banner()).not.toContainElement(notice());
+    expect(main()).not.toContainElement(notice());
+    await waitFor(() => expect(within(banner()).getByRole('link', { name: '로그인' })).toBeInTheDocument());
+    expect(window.location.pathname).toBe('/posts');
+  });
+
+  it('새로고침 복원에 응답이 없어도 — 그 탭은 세션을 잇지 못했다. 연결 실패 문장을 보이고 코드 자리가 없다', async () => {
+    await loggedInOnPreviousPage();
+    await renderApp('/posts', { strict: true, extra: { 'POST /api/v1/auth/reissue': () => 'no-response' } });
+
+    await ended();
+    expect(notice()).toHaveTextContent(NO_RESPONSE);
+    expect(notice().querySelector('[data-error-code]')).toBeNull();
+    expect(sessionStorage.length).toBe(1);
+  });
+
+  it('새로고침 복원이 없는 주소를 만나도(404 C004) — 그 자리에서 보이고 다음 새로고침이 다시 묻는다', async () => {
+    await loggedInOnPreviousPage();
+    await renderApp('/posts', { strict: true, extra: { 'POST /api/v1/auth/reissue': () => fail(404, 'C004') } });
+
+    await ended();
+    expect(notice()).toHaveTextContent(ERROR_SENTENCES.C004.text);
+    expect(within(notice()).getByText('C004')).toBeVisible();
+    expect(sessionStorage.length).toBe(1);
+  });
+
+  it('로그인 화면으로 가도 다시 보이지 않는다 — 보이는 자리는 하나다', async () => {
+    await renderApp('/posts', { as: ME, strict: true, extra: HEADER_ENDS_SESSION });
+    await ended();
+
+    fireEvent.click(within(notice()).getByRole('link', { name: '로그인하기' }));
+
+    await waitFor(() => expect(window.location.pathname).toBe('/login'));
+    await until(['계정이 없으면'], main);
+    expect(document.body).not.toHaveTextContent(ENDED);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('다른 공개 화면으로 가면 사라지고 돌아와도 없다', async () => {
+    await renderApp('/posts', { as: ME, strict: true, extra: HEADER_ENDS_SESSION });
+    await ended();
+
+    await waitFor(() => expect(within(banner()).getByRole('link', { name: '가입' })).toBeInTheDocument());
+    fireEvent.click(within(banner()).getByRole('link', { name: '가입' }));
+    await until(['계정 만들기'], main);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fireEvent.click(within(banner()).getByRole('link', { name: '게시판' }));
+    await until([POST.title], main);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(document.body).not.toHaveTextContent(ENDED);
+  });
+
+  it('보호된 화면에서는 머리글 아래에 보이지 않는다 — 로그인 화면이 이어 보인다', async () => {
+    await loggedInOnPreviousPage();
+    await renderApp('/me', { strict: true, extra: { 'POST /api/v1/auth/reissue': () => fail(401, 'A002') } });
+
+    await waitFor(() => expect(window.location.pathname).toBe('/login'));
+    await until([ENDED, ERROR_SENTENCES.A002.text], main);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('로그인 화면을 연 채로 복원이 실패해도 — 머리글 아래가 가져가지 않는다', async () => {
+    await loggedInOnPreviousPage();
+    await renderApp('/login', { strict: true, extra: { 'POST /api/v1/auth/reissue': () => fail(401, 'A002') } });
+
+    await until([ENDED, ERROR_SENTENCES.A002.text], main);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('재발급이 응답하지 못해 세션이 끝나지 않았으면 — 보일 것이 없다', async () => {
+    await renderApp('/posts', {
+      as: ME,
+      extra: { 'GET /api/v1/members/me': () => fail(401, 'A003'), 'POST /api/v1/auth/reissue': () => 'no-response' },
+    });
+
+    await waitFor(() => expect(banner().querySelector('[data-error-code="A003"]')).toBeVisible());
+    await until([POST.title], main);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 

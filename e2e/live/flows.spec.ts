@@ -70,7 +70,7 @@ async function expectLoggedOut(page: Page) {
 
 /** 목록이 다 그려졌다 — 글이 있으면 표, 없으면 빈 목록 문구다. */
 const listShown = (page: Page) =>
-  expect(main(page).getByRole('table').or(main(page).getByText('등록된 게시글이 없다', { exact: true }))).toBeVisible();
+  expect(main(page).getByRole('table').or(main(page).getByText('등록된 게시글이 없습니다', { exact: true }))).toBeVisible();
 
 /** 가입 — 사용자가 내는 것은 계정 정보와 닉네임이다(sp-docs/plan/phase2.md §7.1). 목록이 다 그려지면 끝난다. */
 async function signUp(page: Page, account: Account = newAccount()): Promise<Account> {
@@ -247,7 +247,7 @@ test('댓글 작성 → 수정 → 삭제 — 각 단계가 반영된다', async
   const title = `e2e 댓글을 받는 글 ${unique()}`;
   await writePost(page, title, `본문 ${unique()}`);
   const comments = panel(page, '댓글 0');
-  await expect(comments.getByText('댓글이 없다', { exact: true })).toBeVisible();
+  await expect(comments.getByText('댓글이 없습니다', { exact: true })).toBeVisible();
 
   const written = `댓글 ${unique()}`;
   await main(page).getByPlaceholder(/^댓글/).fill(written);
@@ -265,7 +265,7 @@ test('댓글 작성 → 수정 → 삭제 — 각 단계가 반영된다', async
   await expect(item.getByText(written, { exact: true })).toHaveCount(0);
 
   await item.getByRole('button', { name: '삭제', exact: true }).click();
-  await expect(panel(page, '댓글 0').getByText('댓글이 없다', { exact: true })).toBeVisible();
+  await expect(panel(page, '댓글 0').getByText('댓글이 없습니다', { exact: true })).toBeVisible();
   await expect(main(page).getByText(edited, { exact: true })).toHaveCount(0);
 
   await removeMyPost(page, title);
@@ -341,6 +341,35 @@ test('로그아웃 뒤 보호된 경로 — 로그인으로 간다', async ({ pa
 
   // 치운다 — 다시 로그인해 탈퇴한다.
   await logIn(page, account);
+  await withdraw(page);
+});
+
+test('글 상세에서 로그아웃 — 떠나는 화면이 다시 묻지 않아 저장된 조회수가 오르지 않는다', async ({ page, traffic }) => {
+  const account = await signUp(page);
+  const title = `e2e 조회수 ${unique()}`;
+  await writePost(page, title, `본문 ${unique()}`);
+  // 상세가 글과 댓글을 다 그렸다. 글 칸의 조회수가 지금 저장된 값이다 — 이 조회가 올린 뒤의 값이다.
+  await expect(panel(page, '댓글 0').getByText('댓글이 없습니다', { exact: true })).toBeVisible();
+  const line = await postPanel(page).getByText(/조회 \d+ /).innerText();
+  const views = /조회 (\d+) /.exec(line)?.[1];
+  expect(views).toBeDefined();
+  const answered = traffic.answered.length;
+
+  await banner(page).getByRole('button', { name: '로그아웃' }).click();
+  await at(page, '/login');
+  await expectLoggedOut(page);
+  // 다시 물었으면 그 응답이 여기 남는다.
+  await page.waitForTimeout(500);
+  expect(traffic.answered.slice(answered)).toEqual([{ key: 'POST /api/v1/auth/logout', status: 204 }]);
+
+  // 목록은 조회수를 올리지 않고 서버의 값을 보인다 — 세션이 바뀌어 받아 둔 것이 없다.
+  await banner(page).getByRole('link', { name: '게시판', exact: true }).click();
+  await at(page, '/posts');
+  const row = main(page).getByRole('row').filter({ hasText: title });
+  await expect(row.getByRole('cell').nth(3)).toHaveText(views as string);
+
+  await logIn(page, account);
+  await removeMyPost(page, title);
   await withdraw(page);
 });
 

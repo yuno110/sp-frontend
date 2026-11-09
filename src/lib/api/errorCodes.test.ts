@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { internalCopyIn } from '@/test/internalCopy';
-import { ERROR_CODES, ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE, UNEXPECTED } from './errorCodes';
+import { plainEndingsIn } from '@/test/plainEnding';
+import {
+  AFTER_WITHDRAWAL,
+  ERROR_CODES,
+  ERROR_SENTENCES,
+  MY_PROFILE,
+  NO_RESPONSE,
+  UNEXPECTED,
+  WITHDRAWN_PROFILE,
+} from './errorCodes';
 
 /**
  * sp-docs/api-contract.md §8.1~§8.4 의 코드 표를 옮긴 것. **정본 파일을 읽지 않고 여기 적는다** — 이 저장소의
@@ -36,7 +45,9 @@ describe('코드 사전', () => {
   });
 
   it('엔드포인트별 뜻은 §8 의 코드에만 붙는다', () => {
-    expect(CONTRACT_CODES).toEqual(expect.arrayContaining(Object.keys(MY_PROFILE)));
+    expect(CONTRACT_CODES).toEqual(
+      expect.arrayContaining([...Object.keys(MY_PROFILE), ...Object.keys(WITHDRAWN_PROFILE), ...Object.keys(AFTER_WITHDRAWAL)]),
+    );
   });
 });
 
@@ -44,12 +55,18 @@ describe('사용자 문장', () => {
   const all = [
     ...Object.entries(ERROR_SENTENCES).map(([code, s]) => [code, s.text] as const),
     ...Object.entries(MY_PROFILE).map(([code, s]) => [`${code} (내 프로필)`, s.text] as const),
+    ...Object.entries(WITHDRAWN_PROFILE).map(([code, s]) => [`${code} (탈퇴한 프로필)`, s.text] as const),
+    ...Object.entries(AFTER_WITHDRAWAL).map(([code, s]) => [`${code} (계정 탈퇴 뒤)`, s.text] as const),
     ['응답 없음', NO_RESPONSE] as const,
     ['오류 응답이 아닌 실패', UNEXPECTED] as const,
   ];
 
   it.each(all)('%s — 내부 구조를 설명하지 않는다', (_, text) => {
     expect(internalCopyIn(text)).toEqual([]);
+  });
+
+  it.each(all)('%s — 문장이 「~다」 로 끝나지 않는다', (_, text) => {
+    expect(plainEndingsIn(text)).toEqual([]);
   });
 
   it('응답 없음은 업무 오류와 다른 문장이다', () => {
@@ -71,6 +88,12 @@ describe('복구 동작', () => {
     expect(ERROR_SENTENCES.M001.recovery).toBeUndefined();
   });
 
+  it('탈퇴한 프로필은 프로필 등록으로 보내지 않는다 — 등록이 M007 이다. 새 계정으로 안내한다', () => {
+    expect(WITHDRAWN_PROFILE.M001.recovery).toBe('signup');
+    expect(WITHDRAWN_PROFILE.S002.recovery).toBe('signup');
+    expect(ERROR_SENTENCES.M007.recovery).toBe('signup');
+  });
+
   it('S001 — 잠시 후 다시 시도하게 한다', () => {
     expect(ERROR_SENTENCES.S001.text).toContain('잠시 후 다시 시도');
   });
@@ -79,6 +102,6 @@ describe('복구 동작', () => {
     const withRecovery = Object.entries(ERROR_SENTENCES)
       .filter(([, s]) => s.recovery)
       .map(([code]) => code);
-    expect(sorted(withRecovery)).toEqual(['A001', 'A002', 'A003', 'S002']);
+    expect(sorted(withRecovery)).toEqual(['A001', 'A002', 'A003', 'M007', 'S002']);
   });
 });

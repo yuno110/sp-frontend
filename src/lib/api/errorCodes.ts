@@ -4,7 +4,7 @@
  */
 
 /** 복구 동작. 화면이 그곳으로 가는 링크를 붙인다(components/ui.tsx). */
-export type Recovery = 'profile' | 'login';
+export type Recovery = 'profile' | 'login' | 'signup';
 
 export interface Sentence {
   text: string;
@@ -35,7 +35,11 @@ export const ERROR_SENTENCES: Record<string, Sentence> = {
   M001: { text: '프로필을 찾을 수 없습니다.' },
   M003: { text: '이미 사용 중인 닉네임입니다.' },
   M006: { text: '이미 프로필이 등록되어 있습니다.' },
-  M007: { text: '탈퇴한 프로필은 다시 등록할 수 없습니다.' },
+  // 탈퇴한 계정의 이메일은 다시 쓸 수 없다(requirements/member.md §3) — 그래서 「다른 이메일로」 다.
+  M007: {
+    text: '탈퇴한 프로필은 다시 등록할 수 없습니다. 글과 댓글을 쓰려면 다른 이메일로 새 계정을 만들어 주세요.',
+    recovery: 'signup',
+  },
 
   P001: { text: '게시글을 찾을 수 없습니다. 삭제되었을 수 있습니다.' },
   P002: { text: '이 게시글을 수정하거나 삭제할 권한이 없습니다.' },
@@ -64,6 +68,18 @@ export type Meanings = Record<string, Sentence>;
 export const MY_PROFILE: Meanings = {
   M001: { text: '아직 프로필을 등록하지 않았습니다.', recovery: 'profile' },
 };
+
+const WITHDRAWN: Sentence = {
+  text: '탈퇴한 프로필입니다. 글과 댓글을 쓰려면 다른 이메일로 새 계정을 만들어 주세요.',
+  recovery: 'signup',
+};
+
+/**
+ * 내 프로필이 탈퇴한 상태의 `GET /members/me` 의 `M001` 과 글·댓글 작성의 `S002`. 두 코드는 미등록과 탈퇴를 가르지 않고
+ * (api-contract.md §3.1·§5.1), 탈퇴한 프로필의 등록은 409 `M007` 이라(§3) 프로필 등록으로 안내하면 막다른 길이다. 가르는 것은
+ * `GET /members/{accountId}` 의 `deleted` 다 — features/member/useNoProfileMeanings.ts 가 고른다.
+ */
+export const WITHDRAWN_PROFILE: Meanings = { M001: WITHDRAWN, S002: WITHDRAWN };
 
 /**
  * 계정 탈퇴가 끝난 뒤의 로그인 만료 — 다시 로그인하라고 안내하지 않는다. 탈퇴한 계정은 로그인도 재발급도 되지 않는다

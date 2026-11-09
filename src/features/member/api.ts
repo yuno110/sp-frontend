@@ -1,4 +1,4 @@
-import http, { unwrap } from '@/lib/api/client';
+import http, { inSession, unwrap } from '@/lib/api/client';
 import type { ApiResponse } from '@/lib/api/types';
 import type { PathId } from '@/features/board/types';
 
@@ -33,9 +33,12 @@ export function updateNickname(nickname: string) {
   return unwrap(http.patch<ApiResponse<MyProfile>>('/api/v1/members/me', { nickname }));
 }
 
-/** 탈퇴 2단계. 멱등이다 — 이미 탈퇴한 프로필도 204 다(§3.1). */
-export function withdrawProfile() {
-  return http.delete('/api/v1/members/me');
+/**
+ * 탈퇴 2단계. 멱등이다 — 이미 탈퇴한 프로필도 204 다(§3.1). 1단계에서 쓰던 Access Token 으로 부른다(§9.1.1) — 토큰과 세션은 부르는 쪽이
+ * 넘긴다(pages/MyPage.tsx). 1단계를 시작한 세션이 그대로면 지금 토큰이고, 끝났거나 바뀌었으면 1단계가 실제로 보낸 토큰이다.
+ */
+export function withdrawProfile(accessToken: string, generation: number) {
+  return http.delete('/api/v1/members/me', inSession(accessToken, generation));
 }
 
 export function checkNickname(nickname: string) {

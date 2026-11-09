@@ -1,4 +1,4 @@
-import { StrictMode } from 'react';
+import { StrictMode, useLayoutEffect } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -94,6 +94,7 @@ type Stores = Awaited<ReturnType<typeof renderApp>>;
 
 let restoreAdapter: (() => void) | null = null;
 let disposeRouter: (() => void) | null = null;
+let shownErrors: { mock: { calls: Array<[unknown, ...unknown[]]> } } | null = null;
 
 /** 프로덕션 모드로 모듈을 새로 읽고 그린다. 라우터는 모듈을 읽을 때 주소창을 읽으므로 경로를 먼저 둔다. */
 async function renderApp(path: string, { loggedIn = false, extra = {} }: { loggedIn?: boolean; extra?: Routes } = {}) {
@@ -108,6 +109,9 @@ async function renderApp(path: string, { loggedIn = false, extra = {} }: { logge
     axios.defaults.adapter = original;
   };
   axios.defaults.adapter = adapter as never;
+  const client = await import('@/lib/api/client');
+  // 화면이 보이는 오류를 모은다 — 아래 `screenErrors`.
+  shownErrors = vi.spyOn(client, 'describeError');
   const { useAuthStore } = await import('@/stores/authStore');
   const { useApiLogStore } = await import('@/stores/apiLogStore');
   if (loggedIn) useAuthStore.getState().setTokens(tokens('1'));
@@ -120,7 +124,7 @@ async function renderApp(path: string, { loggedIn = false, extra = {} }: { logge
       <App />
     </StrictMode>,
   );
-  return { useAuthStore, useApiLogStore, router, queryClient };
+  return { http: client.default, useAuthStore, useApiLogStore, router, queryClient };
 }
 
 /** 앞 페이지에서 로그인해 둔다. 새로 읽은 모듈에는 영속 저장소(Refresh Token)만 남는다 — 새로고침이다. */
@@ -140,6 +144,7 @@ beforeEach(() => {
   sessionStorage.clear();
   localStorage.clear();
   requests.length = 0;
+  shownErrors = null;
 });
 
 afterEach(() => {
@@ -261,40 +266,15 @@ describe('가입', () => {
 
 const entriesOf = (s: Storage) => Array.from({ length: s.length }, (_, i) => [s.key(i), s.getItem(s.key(i)!)]);
 
-interface Fiber {
-  return: Fiber | null;
-  child: Fiber | null;
-  sibling: Fiber | null;
-  memoizedProps: unknown;
-  stateNode: { current?: Fiber } | null;
-}
-
 /**
- * 지금 그려진 컴포넌트가 받은 props — React 가 DOM 노드에 붙이는 fiber 를 따라 커밋된 트리에서 모은다. **React 의 내부
- * 구조이고 공개 API 가 아니다.** 화면이 쥔 오류 상태는 오류 상자(`ErrorBox`·`ErrorLine`)의 `error` props 로만 밖에서
- * 보인다. 이 걸음이 실제 트리를 읽는지는 쓰는 쪽이 입력칸의 `value` 로 양성 대조를 둔다.
+ * 화면이 쥐고 보인 오류 — 그려진 뒤로 오류 표시가 받은 모든 값이다. 화면의 오류 상태는 오류 표시(`ErrorBox`·`ErrorLine`)로만
+ * 밖에서 보이고 둘 다 그것을 `describeError` 에 넘긴다(components/ui.tsx). 지금 그려진 것만이 아니라 **한 번이라도 보인 것을**
+ * 본다 — 다음 화면으로 넘어가며 사라진 오류도 잡힌다. 이 자리가 비밀번호를 찾을 수 있는지는 아래 양성 대조가 본다.
  */
-function renderedProps(): Array<Record<string, unknown>> {
-  const host = document.querySelector('main');
-  const key = host && Object.keys(host).find((k) => k.startsWith('__reactFiber$'));
-  if (!host || !key) return [];
-  let fiber = (host as unknown as Record<string, Fiber>)[key];
-  while (fiber.return) fiber = fiber.return;
-  const props: Array<Record<string, unknown>> = [];
-  const walk = (first: Fiber | null) => {
-    for (let node = first; node; node = node.sibling) {
-      if (node.memoizedProps && typeof node.memoizedProps === 'object') {
-        props.push(node.memoizedProps as Record<string, unknown>);
-      }
-      walk(node.child);
-    }
-  };
-  walk((fiber.stateNode?.current ?? fiber).child);
-  return props;
-}
+const screenErrors = () => (shownErrors?.mock.calls ?? []).map(([error]) => error);
 
-/** 화면이 쥐고 보이는 오류 — 오류 상자가 받은 `error`. */
-const screenErrors = () => renderedProps().flatMap((p) => (p.error == null ? [] : [p.error]));
+/** 그려진 입력칸이 지금 그 값을 쥐었는가. */
+const inputHolds = (value: string) => [...document.querySelectorAll('input')].some((input) => input.value === value);
 
 /** 비밀번호를 들고 있으면 안 되는 자리 가운데 그것을 든 자리의 이름. */
 function holding({ useAuthStore, useApiLogStore, queryClient }: Stores): string[] {
@@ -313,7 +293,7 @@ function holding({ useAuthStore, useApiLogStore, queryClient }: Stores): string[
 }
 
 /**
- * 비밀번호는 계정을 만드는 화면의 입력값에만 둔다. 로그인 요청이 끝나면 그 화면이 내려가고, 저장소·스토어·캐시·다음 화면에
+ * 비밀번호는 계정을 만드는 화면의 입력값에만 둔다. 다음 화면으로 가면 그 화면과 함께 사라지고(멈춘 가입은 그 화면의 입력칸에 남는다), 저장소·스토어·캐시·다음 화면에
  * 넘기는 값에는 어느 때에도 두지 않는다 — 화면과 스토어가 쥐는 오류에도 요청 본문이 없다.
  */
 describe('가입의 비밀번호', () => {
@@ -332,8 +312,8 @@ describe('가입의 비밀번호', () => {
         [LOGIN]: (config) => {
           // 보낸 때의 요청 설정 — 실패하면 axios 가 이 객체를 오류에 싣는다.
           configHeld = holds(config, PASSWORD);
-          // 로그인하는 동안은 입력칸이 그려져 있다 — 화면을 읽는 걸음이 그 값을 찾는다.
-          inputSeen = renderedProps().some((p) => p.value === PASSWORD);
+          // 로그인하는 동안은 입력칸이 그려져 있다 — 비밀번호는 거기에만 있다.
+          inputSeen = inputHolds(PASSWORD);
           duringLogin.push(holding(stores));
           return loginReply();
         },
@@ -416,11 +396,35 @@ describe('비밀번호를 싣는 요청이 실패한 화면', () => {
     act();
     await waitFor(() => expect(screenErrors()).not.toEqual([]));
 
-    // 양성 대조 — 요청은 비밀번호를 실었고, 같은 걸음이 그려진 입력칸에서 그 값을 찾는다.
+    // 양성 대조 — 요청은 비밀번호를 실었고, 입력칸은 고쳐 다시 내도록 그 값을 남겼다.
     expect(holds(sent(key)[0].config, PASSWORD)).toBe(true);
-    expect(renderedProps().some((p) => p.value === PASSWORD)).toBe(true);
+    expect(inputHolds(PASSWORD)).toBe(true);
     expect(holds(screenErrors(), PASSWORD)).toBe(false);
     expect(document.querySelector('[data-error-code]')).toBeVisible();
+  });
+
+  it('양성 대조 — 오류 표시가 요청 본문을 비우지 않은 오류를 받으면 이 검사가 그것을 찾는다', async () => {
+    await renderApp('/login', { extra: { [LOGIN]: () => fail(401, 'AU003') } });
+    expect(screenErrors()).toEqual([]);
+    type(screen.getByLabelText(/^이메일/), EMAIL);
+    type(screen.getByLabelText(/^비밀번호/), PASSWORD);
+    fireEvent.submit(main().querySelector('form')!);
+    await waitFor(() => expect(screenErrors()).not.toEqual([]));
+    expect(holds(screenErrors(), PASSWORD)).toBe(false);
+
+    // 그 요청의 원래 오류 — 보낸 설정을 그대로 싣는다(lib/api/withoutRequestBody.ts).
+    const { config } = sent(LOGIN)[0];
+    const raw = new AxiosError('status 401', AxiosError.ERR_BAD_REQUEST, config, null, {
+      data: { success: false, data: null, error: { code: 'AU003', message: 'AU003', fieldErrors: [] } },
+      status: 401,
+      statusText: '',
+      headers: {},
+      config,
+    });
+    const { ErrorBox } = await import('@/components/ui');
+    render(<ErrorBox error={raw} />);
+
+    expect(holds(screenErrors(), PASSWORD)).toBe(true);
   });
 });
 
@@ -595,7 +599,7 @@ describe('탈퇴', () => {
     await screen.findByRole('button', { name: '다시 시도' });
 
     fireEvent.click(within(banner()).getByRole('link', { name: '게시판' }));
-    await until(['등록된 게시글이 없다'], main);
+    await until(['등록된 게시글이 없습니다'], main);
     fireEvent.click(within(banner()).getByRole('link', { name: '마이페이지' }));
     await until([UNFINISHED], withdrawalPanel);
 
@@ -706,7 +710,7 @@ describe('탈퇴 — 다시 시도할 수 없게 되면', () => {
     }
   });
 
-  it('다시 로그인하면 그 표시를 지운다 — 로그인과 재발급은 탈퇴한 계정에 토큰을 주지 않는다', async () => {
+  it('다시 로그인하면 그 표시를 지운다 — 로그인은 탈퇴한 계정에 토큰을 주지 않는다', async () => {
     vi.resetModules();
     const { useAuthStore } = await import('@/stores/authStore');
     useAuthStore.getState().setWithdrawal('account');
@@ -714,6 +718,311 @@ describe('탈퇴 — 다시 시도할 수 없게 되면', () => {
     useAuthStore.getState().setTokens(tokens('2'));
 
     expect(useAuthStore.getState().withdrawal).toBeNull();
+  });
+});
+
+/**
+ * 재발급이 계정 탈퇴보다 먼저 서버에서 끝났는데 응답이 늦게 오면, 탈퇴가 진행 중이거나 끝난 탭이 재발급 결과를 받는다 — 자동
+ * 재발급은 머리글과 화면의 어느 요청의 401 `A003` 에서든 시작한다. 그 요청을 테스트가 보내 순서를 고정한다. 탈퇴가 어디까지
+ * 끝났는지(`withdrawal`)는 사실이고 재발급의 결과로 바뀌지 않는다. 끝난 탭에는 재발급의 결과가 닿지 않는다.
+ */
+describe('탈퇴와 겹친 재발급', () => {
+  const POSTS_ME = 'GET /api/v1/posts/me';
+  const ENDED = '로그인 상태를 이어가지 못했습니다.';
+
+  function gate() {
+    let open!: () => void;
+    const closed = new Promise<void>((resolve) => (open = resolve));
+    return { closed, open };
+  }
+
+  /** 마이페이지를 열고 재발급 하나를 띄워 둔다 — 문을 열 때까지 끝나지 않는다. */
+  async function openWithReissueInFlight(reissued: () => Reply, extra: Routes = {}) {
+    const reissue = gate();
+    const stores = await openMyPage({
+      ...WITHDRAWN,
+      [POSTS_ME]: () => fail(401, 'A003'),
+      [REISSUE]: async () => {
+        await reissue.closed;
+        return reissued();
+      },
+      ...extra,
+    });
+    const background = stores.http.get('/api/v1/posts/me').catch((e: unknown) => e);
+    await waitFor(() => expect(sent(REISSUE)).toHaveLength(1));
+    return { ...stores, reissue, background };
+  }
+
+  /** 둘째 단계가 문 앞에서 기다린다 — 첫 단계가 끝난 상태다. */
+  function stepTwoHeld(reply: () => Reply) {
+    const stepTwo = gate();
+    return {
+      stepTwo,
+      routes: {
+        [WITHDRAW_PROFILE]: async () => {
+          await stepTwo.closed;
+          return reply();
+        },
+      },
+    };
+  }
+
+  const atStepTwo = () => waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+
+  it('두 단계 사이에 재발급이 성공하면 — 탈퇴가 어디까지 끝났는지는 남고, 끝나면 토큰이 없고 탈퇴했다고 보인다', async () => {
+    const { stepTwo, routes: held } = stepTwoHeld(() => NO_CONTENT);
+    const { useAuthStore, reissue, background } = await openWithReissueInFlight(() => ok(tokens('2')), held);
+
+    submitWithdrawal();
+    await atStepTwo();
+    expect(useAuthStore.getState().withdrawal).toBe('account');
+
+    reissue.open();
+    await background;
+    expect(useAuthStore.getState().withdrawal).toBe('account');
+    expect(useAuthStore.getState().accessToken).toBe(accessToken('2'));
+
+    stepTwo.open();
+    await atPath('/login');
+    await until([DONE], main);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+    expect(sessionStorage.length).toBe(0);
+    expect(main()).not.toHaveTextContent(ENDED);
+  });
+
+  it('두 단계 사이에 재발급이 성공하고 둘째 단계가 실패하면 — 다시 시도 안내가 남고 받은 토큰으로 다시 시도한다', async () => {
+    let stepTwoCalls = 0;
+    const { stepTwo, routes: held } = stepTwoHeld(() => (++stepTwoCalls === 1 ? fail(500, 'C005') : NO_CONTENT));
+    const { useAuthStore, reissue, background } = await openWithReissueInFlight(() => ok(tokens('2')), held);
+
+    submitWithdrawal();
+    await atStepTwo();
+    reissue.open();
+    await background;
+    stepTwo.open();
+
+    await until([UNFINISHED, FOREWARNED, ERROR_SENTENCES.C005.text], withdrawalPanel);
+    expect(within(withdrawalPanel()).getByRole('button', { name: '다시 시도' })).toBeEnabled();
+    expect(useAuthStore.getState().withdrawal).toBe('account');
+
+    submitWithdrawal('second-try');
+    await atPath('/login');
+    await until([DONE], main);
+    expect(sent(WITHDRAW_ACCOUNT).at(-1)?.auth).toBe(`Bearer ${accessToken('2')}`);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+  });
+
+  it.each([
+    ['성공', (): Reply => ok(tokens('late'))],
+    ['거부', (): Reply => fail(401, 'A002')],
+    ['서버 오류', (): Reply => fail(500, 'C005')],
+    ['응답 없음', (): Reply => 'no-response'],
+  ])('탈퇴가 끝난 뒤에 재발급이 %s 로 끝나면 — 토큰이 되살아나지 않고 세션 실패도 없고 원요청이 다시 나가지 않는다', async (_, reissued) => {
+    const { useAuthStore, reissue, background } = await openWithReissueInFlight(reissued);
+
+    submitWithdrawal();
+    await atPath('/login');
+    await until([DONE], main);
+
+    reissue.open();
+    await background;
+    // 재발급의 끝이 화면까지 닿을 시간을 준다.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: null,
+      refreshToken: null,
+      sessionFailure: null,
+      withdrawal: null,
+    });
+    expect(sessionStorage.length).toBe(0);
+    expect(sent(POSTS_ME)).toHaveLength(1);
+    expect(main()).toHaveTextContent(DONE);
+    expect(main()).not.toHaveTextContent(ENDED);
+    expect(document.querySelector('[data-error-code]')).toBeNull();
+    expect(within(banner()).getByRole('link', { name: '로그인' })).toBeInTheDocument();
+    expect(within(banner()).queryByRole('button', { name: /로그아웃/ })).toBeNull();
+  });
+
+  it('두 단계 사이에 재발급이 거부되어 토큰이 비어도 둘째 단계가 성공하면 — 끝났다고 보인다. 다시 시도할 수 없다는 안내와 세션 실패가 남지 않는다', async () => {
+    const { stepTwo, routes: held } = stepTwoHeld(() => NO_CONTENT);
+    const { useAuthStore, reissue, background } = await openWithReissueInFlight(() => fail(401, 'A002'), held);
+
+    submitWithdrawal();
+    await atStepTwo();
+    reissue.open();
+    await background;
+
+    // 토큰이 비어 로그인 화면으로 갔다 — 둘째 단계가 어떻게 끝날지 모르는 동안은 지금 아는 사실을 보인다.
+    await atPath('/login');
+    await until([UNFINISHED, CANNOT_RETRY, AFTER_WITHDRAWAL.A003.text], main);
+
+    stepTwo.open();
+    await until([DONE], main);
+
+    expect(main()).not.toHaveTextContent(CANNOT_RETRY);
+    expect(main()).not.toHaveTextContent(ENDED);
+    expect(main()).not.toHaveTextContent(ERROR_SENTENCES.A003.text);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, withdrawal: null });
+  });
+
+  it('첫 단계를 기다리는 사이에 재발급이 거부되어 토큰이 비어도 — 첫 단계가 보낸 토큰으로 둘째 단계를 보내 끝낸다. 끝났다고만 보인다', async () => {
+    const stepOne = gate();
+    const { useAuthStore, reissue, background } = await openWithReissueInFlight(() => fail(401, 'A002'), {
+      [WITHDRAW_ACCOUNT]: async () => {
+        await stepOne.closed;
+        return NO_CONTENT;
+      },
+    });
+    submitWithdrawal();
+    await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+    reissue.open();
+    await background;
+    await atPath('/login');
+    await until([ENDED], main);
+
+    stepOne.open();
+
+    await until([DONE], main);
+    expect(sent(WITHDRAW_PROFILE).map((r) => r.auth)).toEqual([`Bearer ${accessToken('1')}`]);
+    expect(main()).not.toHaveTextContent(ENDED);
+    expect(main()).not.toHaveTextContent(CANNOT_RETRY);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, withdrawal: null });
+  });
+
+  it('첫 단계를 기다리는 사이에 재발급이 거부되어 토큰이 비고 첫 단계가 보낸 토큰도 만료됐으면 — 다시 재발급하지 않는다. 다시 시도할 수 없다는 안내가 남는다', async () => {
+    const stepOne = gate();
+    const { reissue, background } = await openWithReissueInFlight(() => fail(401, 'A002'), {
+      [WITHDRAW_ACCOUNT]: async () => {
+        await stepOne.closed;
+        return NO_CONTENT;
+      },
+      [WITHDRAW_PROFILE]: () => fail(401, 'A003'),
+    });
+    submitWithdrawal();
+    await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+    reissue.open();
+    await background;
+    await atPath('/login');
+    await until([ENDED], main);
+
+    stepOne.open();
+
+    await until([UNFINISHED, CANNOT_RETRY, AFTER_WITHDRAWAL.A003.text], main);
+    await waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+    await settled();
+    expect(sent(REISSUE)).toHaveLength(1);
+    expect(sent(WITHDRAW_PROFILE)).toHaveLength(1);
+    expect(main()).toHaveTextContent(CANNOT_RETRY);
+    expect(main()).not.toHaveTextContent(DONE);
+  });
+
+  it('로그인 화면이 그려지고 그 효과가 돌기 전에 둘째 단계가 끝나도 — 끝났다고 보인다. 끝났다는 사실을 앞선 값으로 지우지 않는다', async () => {
+    vi.resetModules();
+    const { useAuthStore } = await import('@/stores/authStore');
+    const { LoginPage } = await import('@/pages/LoginPage');
+    const { MemoryRouter } = await import('react-router-dom');
+    useAuthStore.getState().setWithdrawal('account');
+    // 커밋과 효과 사이에 끼어든다 — 레이아웃 효과는 효과보다 먼저 돈다. 실제로는 그 사이가 벌어질 때만 일어나는 순서다.
+    function EndsBeforeEffects() {
+      useLayoutEffect(() => useAuthStore.getState().setWithdrawal('done'), []);
+      return null;
+    }
+
+    render(
+      <MemoryRouter>
+        <LoginPage />
+        <EndsBeforeEffects />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(DONE)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(CANNOT_RETRY))).toBeNull();
+    expect(useAuthStore.getState().withdrawal).toBeNull();
+  });
+
+  it('두 단계 사이에 재발급이 거부되어 토큰이 비고 둘째 단계도 실패하면 — 다시 시도할 수 없다는 안내가 남는다', async () => {
+    const { stepTwo, routes: held } = stepTwoHeld(() => fail(500, 'C005'));
+    const { reissue, background } = await openWithReissueInFlight(() => fail(401, 'A002'), held);
+
+    submitWithdrawal();
+    await atStepTwo();
+    reissue.open();
+    await background;
+    await atPath('/login');
+    await until([CANNOT_RETRY], main);
+
+    stepTwo.open();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(main()).toHaveTextContent(CANNOT_RETRY);
+    expect(main()).toHaveTextContent(AFTER_WITHDRAWAL.A003.text);
+    expect(main()).not.toHaveTextContent(DONE);
+  });
+
+  it.each([
+    ['거부', (): Reply => fail(401, 'A002')],
+    ['성공', (): Reply => ok(tokens('late'))],
+  ])('로그아웃이 끝난 뒤에 재발급이 %s 로 끝나면 — 로그인 화면에 세션 실패가 보이지 않는다', async (_, reissued) => {
+    const { useAuthStore, reissue, background } = await openWithReissueInFlight(reissued, { [LOGOUT]: () => NO_CONTENT });
+
+    fireEvent.click(within(banner()).getByRole('button', { name: /로그아웃/ }));
+    await atPath('/login');
+    await until(['계정이 없으면'], main);
+
+    reissue.open();
+    await background;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionFailure: null });
+    expect(main()).not.toHaveTextContent(ENDED);
+    expect(sent(POSTS_ME)).toHaveLength(1);
+  });
+
+  it('프로필 탈퇴가 남은 채로 공개 화면에 있을 때 세션이 끝나면 — 그 자리에서 다시 시도할 수 없다고 보이고 다시 로그인하라고 하지 않는다', async () => {
+    const { http } = await openMyPage({
+      ...WITHDRAWN,
+      [WITHDRAW_PROFILE]: () => fail(500, 'C005'),
+      [POSTS_ME]: () => fail(401, 'A003'),
+      [REISSUE]: () => fail(401, 'A002'),
+    });
+    submitWithdrawal();
+    await screen.findByRole('button', { name: '다시 시도' });
+    fireEvent.click(within(banner()).getByRole('link', { name: '게시판' }));
+    await until(['등록된 게시글이 없습니다'], main);
+
+    await http.get('/api/v1/posts/me').catch(() => null);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(CANNOT_RETRY));
+    expect(screen.getByRole('alert')).toHaveTextContent(UNFINISHED);
+    expect(screen.getByRole('alert')).toHaveTextContent(AFTER_WITHDRAWAL.A003.text);
+    expect(screen.getByRole('alert')).not.toHaveTextContent(ERROR_SENTENCES.A003.text);
+    expect(within(screen.getByRole('alert')).queryByRole('link')).toBeNull();
+    expect(pathname()).toBe('/posts');
+
+    // 한 번 보였으니 로그인 화면에서 다시 보이지 않는다.
+    fireEvent.click(within(banner()).getByRole('link', { name: '로그인' }));
+    await until(['계정이 없으면'], main);
+    expect(main()).not.toHaveTextContent(CANNOT_RETRY);
+  });
+
+  it('프로필 탈퇴가 남은 채로 로그아웃이 실패하면 — 토큰이 남아 다시 시도할 수 있고 다시 로그인하라고 하지 않는다', async () => {
+    const { useAuthStore } = await openMyPage({
+      ...WITHDRAWN,
+      [WITHDRAW_PROFILE]: () => fail(500, 'C005'),
+      [LOGOUT]: () => fail(401, 'A003'),
+      [REISSUE]: () => fail(503, 'C005'),
+    });
+    submitWithdrawal();
+    await screen.findByRole('button', { name: '다시 시도' });
+
+    fireEvent.click(within(banner()).getByRole('button', { name: /로그아웃/ }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('로그아웃하지 못했습니다.'));
+    expect(screen.getByRole('alert')).toHaveTextContent(AFTER_WITHDRAWAL.A003.text);
+    expect(screen.getByRole('alert')).not.toHaveTextContent(ERROR_SENTENCES.A003.text);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('1'), withdrawal: 'account' });
+    expect(within(withdrawalPanel()).getByRole('button', { name: '다시 시도' })).toBeEnabled();
   });
 });
 
@@ -741,7 +1050,7 @@ describe('로그인 화면이 이어 보이는 안내', () => {
     await until([notice], main);
 
     fireEvent.click(within(banner()).getByRole('link', { name: '게시판' }));
-    await until(['등록된 게시글이 없다'], main);
+    await until(['등록된 게시글이 없습니다'], main);
     fireEvent.click(within(banner()).getByRole('link', { name: '로그인' }));
     await until(['계정이 없으면'], main);
 
@@ -787,5 +1096,1042 @@ describe('토큰만 지우는 버튼', () => {
     expect(pressed.find((p) => p.name === '탈퇴')?.sent).toEqual([WITHDRAW_ACCOUNT]);
     expect(pressed.filter((p) => p.cleared && p.sent.length === 0)).toEqual([]);
     expect(pressed.filter((p) => p.cleared)).toEqual([{ name: '로그아웃', cleared: true, sent: [LOGOUT] }]);
+  });
+});
+
+/** 문을 열 때까지 답하지 않는다. */
+function held(reply: () => Reply) {
+  let open!: () => void;
+  const closed = new Promise<void>((resolve) => (open = resolve));
+  return {
+    open,
+    handler: async (): Promise<Reply> => {
+      await closed;
+      return reply();
+    },
+  };
+}
+
+/** 끝난 요청의 뒤처리가 화면까지 닿을 시간을 준다. */
+const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+const clickLogout = () => fireEvent.click(within(banner()).getByRole('button', { name: /로그아웃/ }));
+
+/**
+ * 요청을 기다리는 사이에 세션이 바뀐다. 로그인 화면에는 머리글의 로그아웃과 로그인 폼이 함께 있고, 요청을 기다리는 동안에도 화면을
+ * 옮길 수 있다. 끝난 요청이 지금 세션을 끝내거나 덮거나 지금 세션의 토큰으로 다음 단계를 보내면 안 된다.
+ */
+describe('요청을 기다리는 사이에 바뀐 세션', () => {
+  const OTHER_EMAIL = 'other@example.com';
+  const ENDED = '로그인 상태를 이어가지 못했습니다.';
+  const LOGOUT_FAILED = '로그아웃하지 못했습니다.';
+
+  const emailOf = (config: InternalAxiosRequestConfig) => (JSON.parse(config.data as string) as { email: string }).email;
+  const loginEmails = () => sent(LOGIN).map((r) => (r.body as { email: string }).email);
+  const storedTokens = () => entriesOf(sessionStorage).map(([, value]) => value);
+
+  /** 로그인 화면의 폼을 낸다. */
+  function submitLogin(email = OTHER_EMAIL) {
+    type(screen.getByLabelText(/^이메일/), email);
+    type(screen.getByLabelText(/^비밀번호/), 'Passw0rd!');
+    fireEvent.submit(main().querySelector('form')!);
+  }
+
+  /** 로그인 화면으로 옮긴다 — 머리글의 링크는 세션이 있으면 없지만 앞으로 가기·뒤로 가기로 올 수 있다. */
+  async function toLoginScreen(router: Stores['router']) {
+    await act(() => router.navigate('/login'));
+    await until(['계정이 없으면'], main);
+  }
+
+  /** 글 목록이 그려질 때까지 기다린다 — 주소는 화면보다 먼저 바뀐다. 그 사이에 문을 열면 앞 화면에 대고 단언하게 된다. */
+  async function atPostList() {
+    await atPath('/posts');
+    await until(['등록된 게시글이 없습니다'], main);
+  }
+
+  async function loginAsOther(router: Stores['router']) {
+    await toLoginScreen(router);
+    submitLogin();
+    await atPostList();
+  }
+
+  /** 로그인 화면에 닿는 바로 그때 다른 세션이 시작된다 — 옮기기를 기다리는 동안의 일이다. */
+  function startsSessionOnArrival({ router, useAuthStore }: Stores) {
+    const stop = router.subscribe((state) => {
+      if (state.location.pathname !== '/login') return;
+      stop();
+      useAuthStore.getState().setTokens(tokens('B'));
+    });
+  }
+
+  describe('로그아웃', () => {
+    it.each([
+      ['다른 계정으로', 'B'],
+      // 같은 계정이 같은 초에 받은 토큰은 문자열이 같다(sp-docs/requirements/member.md §6.2) — 토큰을 비교해서는 가를 수 없다.
+      ['같은 계정이 같은 초에 같은 토큰 문자열로', '1'],
+    ])('%s 로그인한 뒤에 로그아웃의 응답이 오면 — 새 세션이 그대로이고 로그인 화면으로 옮기지 않는다', async (_, tag) => {
+      const logout = held(() => NO_CONTENT);
+      const { useAuthStore } = await renderApp('/login', {
+        loggedIn: true,
+        extra: { [LOGOUT]: logout.handler, [LOGIN]: () => ok(tokens(tag)) },
+      });
+      clickLogout();
+      await waitFor(() => expect(sent(LOGOUT)).toHaveLength(1));
+      submitLogin();
+      await atPostList();
+
+      logout.open();
+      await settled();
+
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken(tag), refreshToken: `RT-${tag}` });
+      expect(storedTokens()).toEqual([`RT-${tag}`]);
+      expect(pathname()).toBe('/posts');
+      expect(within(banner()).getByRole('button', { name: /로그아웃/ })).toBeInTheDocument();
+    });
+
+    it.each([
+      ['서버 오류 500 C005', (): Reply => fail(500, 'C005')],
+      ['응답 없음', (): Reply => 'no-response'],
+      ['401 A003', (): Reply => fail(401, 'A003')],
+    ])('다른 계정으로 로그인한 뒤에 로그아웃이 %s 로 실패하면 — 앞 세션의 실패를 보이지 않는다. 재발급도 없다', async (_, reply) => {
+      const logout = held(reply);
+      const { useAuthStore } = await renderApp('/login', {
+        loggedIn: true,
+        extra: { [LOGOUT]: logout.handler, [LOGIN]: () => ok(tokens('B')) },
+      });
+      clickLogout();
+      await waitFor(() => expect(sent(LOGOUT)).toHaveLength(1));
+      submitLogin();
+      await atPostList();
+
+      logout.open();
+      await settled();
+
+      expect(document.body).not.toHaveTextContent(LOGOUT_FAILED);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(writes()).toEqual([LOGOUT, LOGIN]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B', sessionFailure: null });
+    });
+
+    it('기다리는 사이에 재발급만 됐으면 — 같은 세션이다. 로그아웃이 끝나면 토큰이 비고 로그인 화면으로 간다', async () => {
+      const logout = held(() => NO_CONTENT);
+      const { useAuthStore } = await renderApp('/posts', { loggedIn: true, extra: { [LOGOUT]: logout.handler } });
+      clickLogout();
+      await waitFor(() => expect(sent(LOGOUT)).toHaveLength(1));
+      act(() => useAuthStore.getState().setReissuedTokens(tokens('2')));
+
+      logout.open();
+
+      await atPath('/login');
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+      expect(storedTokens()).toEqual([]);
+    });
+
+    it('기다리는 사이에 재발급만 됐고 로그아웃이 실패하면 — 실패가 그 자리에 보이고 받은 토큰이 남는다', async () => {
+      const logout = held(() => fail(500, 'C005'));
+      const { useAuthStore } = await renderApp('/posts', { loggedIn: true, extra: { [LOGOUT]: logout.handler } });
+      clickLogout();
+      await waitFor(() => expect(sent(LOGOUT)).toHaveLength(1));
+      act(() => useAuthStore.getState().setReissuedTokens(tokens('2')));
+
+      logout.open();
+
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(LOGOUT_FAILED));
+      expect(pathname()).toBe('/posts');
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('2'), refreshToken: 'RT-2' });
+    });
+
+    it('기다리는 사이에 세션이 끝나기만 했으면 — 그 자리에 머물고 세션이 끝난 이유가 남는다', async () => {
+      const logout = held(() => NO_CONTENT);
+      const { http, useAuthStore } = await renderApp('/posts', {
+        loggedIn: true,
+        extra: {
+          [LOGOUT]: logout.handler,
+          'GET /api/v1/posts/me': () => fail(401, 'A003'),
+          [REISSUE]: () => fail(401, 'A002'),
+        },
+      });
+      clickLogout();
+      await waitFor(() => expect(sent(LOGOUT)).toHaveLength(1));
+      await http.get('/api/v1/posts/me').catch(() => null);
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(ENDED));
+
+      logout.open();
+      await settled();
+
+      expect(pathname()).toBe('/posts');
+      expect(screen.getByRole('alert')).toHaveTextContent(ENDED);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+    });
+
+    it('로그인 화면으로 옮기는 사이에 다른 세션이 시작되면 — 그 세션을 지우지 않는다', async () => {
+      const stores = await renderApp('/posts', { loggedIn: true, extra: { [LOGOUT]: () => NO_CONTENT } });
+      startsSessionOnArrival(stores);
+
+      clickLogout();
+      await atPath('/login');
+      await settled();
+
+      expect(stores.useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+      expect(storedTokens()).toEqual(['RT-B']);
+    });
+  });
+
+  describe('탈퇴', () => {
+    /** 탈퇴를 시작한 세션의 토큰이다 — `openMyPage` 가 이 토큰으로 로그인한다. */
+    const HELD = `Bearer ${accessToken('1')}`;
+    const profileTokens = () => sent(WITHDRAW_PROFILE).map((r) => r.auth);
+    /** 둘째 단계의 답. 첫 단계를 기다리는 사이에 세션이 바뀐 뒤에 첫 단계가 보낸 토큰으로 보낸 요청이 이렇게 끝난다. */
+    const STEP_TWO_ANSWERS: Array<[string, () => Reply]> = [
+      ['204', () => NO_CONTENT],
+      ['404 M001', () => fail(404, 'M001')],
+      // 그 토큰이 만료됐다.
+      ['401 A003', () => fail(401, 'A003')],
+      ['서버 오류 500 C005', () => fail(500, 'C005')],
+      ['응답 없음', () => 'no-response'],
+    ];
+    const STEP_TWO_FAILURES = STEP_TWO_ANSWERS.slice(2);
+
+    it.each(STEP_TWO_ANSWERS)('첫 단계를 기다리는 사이에 다른 계정으로 로그인하고 첫 단계가 보낸 토큰으로 보낸 둘째 단계가 %s 면 — 지금 세션의 토큰을 쓰지 않는다. 재발급도 재시도도 없고 새 세션이 그대로다', async (_, reply) => {
+      const stepOne = held(() => NO_CONTENT);
+      const { router, useAuthStore, useApiLogStore } = await openMyPage({
+        ...WITHDRAWN,
+        [WITHDRAW_ACCOUNT]: stepOne.handler,
+        [WITHDRAW_PROFILE]: reply,
+        [LOGIN]: () => ok(tokens('B')),
+      });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+      await loginAsOther(router);
+
+      stepOne.open();
+      await waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+      await settled();
+
+      expect(writes()).toEqual([WITHDRAW_ACCOUNT, LOGIN, WITHDRAW_PROFILE]);
+      expect(profileTokens()).toEqual([HELD]);
+      expect(useAuthStore.getState()).toMatchObject({
+        accessToken: accessToken('B'),
+        refreshToken: 'RT-B',
+        withdrawal: null,
+        sessionFailure: null,
+      });
+      expect(storedTokens()).toEqual(['RT-B']);
+      expect(pathname()).toBe('/posts');
+      expect(document.body).not.toHaveTextContent(DONE);
+      expect(screen.queryByRole('alert')).toBeNull();
+      // 첫 단계가 보낸 토큰은 그 함수 안에만 있다 — 스토어에도, 화면에도, 요청 기록에도 남지 않는다.
+      expect(JSON.stringify(useAuthStore.getState())).not.toContain(accessToken('1'));
+      expect(document.documentElement.outerHTML).not.toContain(accessToken('1'));
+      expect(JSON.stringify(useApiLogStore.getState())).not.toContain(accessToken('1'));
+    });
+
+    it('첫 단계를 기다리는 사이에 재발급을 받은 뒤 다른 계정으로 로그인했으면 — 첫 단계가 보낸 토큰으로 나간다. 그 뒤에 받은 토큰이 아니다', async () => {
+      const stepOne = held(() => NO_CONTENT);
+      const { router, useAuthStore } = await openMyPage({
+        ...WITHDRAWN,
+        [WITHDRAW_ACCOUNT]: stepOne.handler,
+        [LOGIN]: () => ok(tokens('B')),
+      });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+      act(() => useAuthStore.getState().setReissuedTokens(tokens('2')));
+      await loginAsOther(router);
+
+      stepOne.open();
+      await waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+      await settled();
+
+      expect(profileTokens()).toEqual([HELD]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B', withdrawal: null });
+    });
+
+    it('둘째 단계의 재발급을 기다리는 사이에 다른 계정으로 로그인했으면 — 둘째 단계를 다시 보내지 않는다', async () => {
+      const reissue = held(() => ok(tokens('late')));
+      const { router, useAuthStore } = await openMyPage({
+        ...WITHDRAWN,
+        [WITHDRAW_PROFILE]: () => fail(401, 'A003'),
+        [REISSUE]: reissue.handler,
+        [LOGIN]: () => ok(tokens('B')),
+      });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(REISSUE)).toHaveLength(1));
+      await loginAsOther(router);
+
+      reissue.open();
+      await settled();
+
+      expect(profileTokens()).toEqual([HELD]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B', withdrawal: null, sessionFailure: null });
+      expect(pathname()).toBe('/posts');
+    });
+
+    it('둘째 단계가 401 A003 이고 세션이 그대로면 — 재발급해 받은 토큰으로 다시 보내고 끝낸다', async () => {
+      const { useAuthStore } = await openMyPage({
+        ...WITHDRAWN,
+        [WITHDRAW_PROFILE]: (config) => (config.headers.Authorization === HELD ? fail(401, 'A003') : NO_CONTENT),
+        [REISSUE]: () => ok(tokens('2')),
+      });
+
+      submitWithdrawal();
+
+      await atPath('/login');
+      await until([DONE], main);
+      expect(profileTokens()).toEqual([HELD, `Bearer ${accessToken('2')}`]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+    });
+
+    it.each([
+      ['204', (): Reply => NO_CONTENT],
+      ['404 M001', (): Reply => fail(404, 'M001')],
+      ['서버 오류 500 C005', (): Reply => fail(500, 'C005')],
+      ['401 A003', (): Reply => fail(401, 'A003')],
+    ])('둘째 단계를 기다리는 사이에 다른 계정으로 로그인한 뒤 그 응답이 %s 면 — 새 세션이 그대로이고 끝났다는 표시도 옮김도 없다', async (_, reply) => {
+      const stepTwo = held(reply);
+      const { router, useAuthStore } = await openMyPage({
+        ...WITHDRAWN,
+        [WITHDRAW_PROFILE]: stepTwo.handler,
+        [LOGIN]: () => ok(tokens('B')),
+      });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+      await loginAsOther(router);
+
+      stepTwo.open();
+      await settled();
+
+      expect(writes()).toEqual([WITHDRAW_ACCOUNT, WITHDRAW_PROFILE, LOGIN]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B', withdrawal: null });
+      expect(pathname()).toBe('/posts');
+      expect(document.body).not.toHaveTextContent(DONE);
+    });
+
+    it('첫 단계를 기다리는 사이에 로그아웃했으면 — 첫 단계가 보낸 토큰으로 둘째 단계를 보내 끝낸다. 로그인 화면이 탈퇴했다고 보인다', async () => {
+      const stepOne = held(() => NO_CONTENT);
+      const { useAuthStore } = await openMyPage({
+        [WITHDRAW_ACCOUNT]: stepOne.handler,
+        // 실제 서비스가 토큰 없는 요청에 내는 답이다.
+        [WITHDRAW_PROFILE]: (config) => (config.headers.Authorization ? NO_CONTENT : fail(401, 'A001')),
+        [LOGOUT]: () => NO_CONTENT,
+      });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+      clickLogout();
+      await atPath('/login');
+
+      stepOne.open();
+
+      await until([DONE], main);
+      expect(writes()).toEqual([WITHDRAW_ACCOUNT, LOGOUT, WITHDRAW_PROFILE]);
+      expect(profileTokens()).toEqual([HELD]);
+      expect(main()).not.toHaveTextContent(CANNOT_RETRY);
+      expect(document.querySelector('[data-error-code]')).toBeNull();
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, withdrawal: null });
+      expect(storedTokens()).toEqual([]);
+      expect(pathname()).toBe('/login');
+    });
+
+    it.each(STEP_TWO_FAILURES)('첫 단계를 기다리는 사이에 로그아웃했고 첫 단계가 보낸 토큰으로 보낸 둘째 단계가 %s 면 — 재발급하지 않는다. 로그인 화면이 다시 시도할 수 없다고 보인다', async (_, reply) => {
+      const stepOne = held(() => NO_CONTENT);
+      const { useAuthStore } = await openMyPage({
+        [WITHDRAW_ACCOUNT]: stepOne.handler,
+        [WITHDRAW_PROFILE]: reply,
+        [LOGOUT]: () => NO_CONTENT,
+      });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+      clickLogout();
+      await atPath('/login');
+
+      stepOne.open();
+
+      await until([UNFINISHED, CANNOT_RETRY], main);
+      await waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+      await settled();
+      expect(writes()).toEqual([WITHDRAW_ACCOUNT, LOGOUT, WITHDRAW_PROFILE]);
+      expect(profileTokens()).toEqual([HELD]);
+      expect(main()).toHaveTextContent(CANNOT_RETRY);
+      expect(main()).not.toHaveTextContent(DONE);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionFailure: null });
+    });
+
+    it('첫 단계를 기다리는 사이에 재발급만 됐으면 — 같은 세션이다. 둘째 단계가 받은 토큰으로 나가고 끝까지 간다', async () => {
+      const stepOne = held(() => NO_CONTENT);
+      const { useAuthStore } = await openMyPage({ ...WITHDRAWN, [WITHDRAW_ACCOUNT]: stepOne.handler });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+      act(() => useAuthStore.getState().setReissuedTokens(tokens('2')));
+
+      stepOne.open();
+
+      await atPath('/login');
+      await until([DONE], main);
+      expect(sent(WITHDRAW_PROFILE).map((r) => r.auth)).toEqual([`Bearer ${accessToken('2')}`]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+    });
+
+    /** 재발급으로 받은 토큰. 시작할 때의 토큰(`HELD`)은 만료됐다. */
+    const RECEIVED = `Bearer ${accessToken('2')}`;
+
+    /**
+     * 첫 단계가 시작할 때의 토큰으로 나가 401 A003 을 받고, 재발급을 받아 받은 토큰으로 다시 나간다 — 그 재시도는 문을 열 때까지 답하지
+     * 않는다. 시작할 때의 토큰에는 실제 서비스가 만료 토큰에 내는 답(401 A003)을 낸다.
+     */
+    function stepOneRecovered(retry: { handler: () => Promise<Reply> }): Routes {
+      return {
+        [WITHDRAW_ACCOUNT]: (config) => (config.headers.Authorization === HELD ? fail(401, 'A003') : retry.handler()),
+        [REISSUE]: () => ok(tokens('2')),
+        [WITHDRAW_PROFILE]: (config) => (config.headers.Authorization === HELD ? fail(401, 'A003') : NO_CONTENT),
+        [LOGOUT]: () => NO_CONTENT,
+        [LOGIN]: () => ok(tokens('B')),
+      };
+    }
+
+    it.each([
+      {
+        how: '끝나면(로그아웃)',
+        change: async ({ useAuthStore }: Stores) => {
+          clickLogout();
+          await atPath('/login');
+          await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+        },
+        expected: [WITHDRAW_ACCOUNT, REISSUE, WITHDRAW_ACCOUNT, LOGOUT, WITHDRAW_PROFILE],
+        after: async ({ useAuthStore }: Stores) => {
+          // 탈퇴가 끝났다 — 로그인 화면이 그렇게 보인다.
+          await until([DONE], main);
+          expect(main()).not.toHaveTextContent(CANNOT_RETRY);
+          expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, withdrawal: null });
+          expect(storedTokens()).toEqual([]);
+          expect(pathname()).toBe('/login');
+        },
+      },
+      {
+        how: '바뀌면(다른 계정으로 로그인)',
+        change: ({ router }: Stores) => loginAsOther(router),
+        expected: [WITHDRAW_ACCOUNT, REISSUE, WITHDRAW_ACCOUNT, LOGIN, WITHDRAW_PROFILE],
+        after: async ({ useAuthStore }: Stores) => {
+          // 앞 계정의 프로필은 지워졌다(둘째 단계가 204). 새 세션은 그대로이고 그 화면에 탈퇴의 표시가 없다.
+          expect(useAuthStore.getState()).toMatchObject({
+            accessToken: accessToken('B'),
+            refreshToken: 'RT-B',
+            withdrawal: null,
+            sessionFailure: null,
+          });
+          expect(storedTokens()).toEqual(['RT-B']);
+          expect(pathname()).toBe('/posts');
+          expect(document.body).not.toHaveTextContent(DONE);
+          expect(screen.queryByRole('alert')).toBeNull();
+        },
+      },
+    ])('첫 단계가 401 복구로 받은 토큰으로 다시 나간 뒤 그 응답을 기다리는 사이에 세션이 $how — 둘째 단계가 첫 단계가 실제로 보낸 토큰(받은 토큰)으로 나간다', async ({ change, expected, after }) => {
+      const retry = held(() => NO_CONTENT);
+      const stores = await openMyPage(stepOneRecovered(retry));
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(2));
+      expect(sent(WITHDRAW_ACCOUNT).map((r) => r.auth)).toEqual([HELD, RECEIVED]);
+      await change(stores);
+
+      retry.open();
+      await waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+      await settled();
+
+      expect(profileTokens()).toEqual([RECEIVED]);
+      expect(profileTokens()).not.toContain(`Bearer ${accessToken('B')}`);
+      expect(writes()).toEqual(expected);
+      await after(stores);
+    });
+
+    /** 첫 단계의 응답에서 보낸 토큰을 읽을 수 없게 한다 — 답하기 전에 그 요청 설정의 헤더를 바꾼다. 응답은 그 설정을 싣는다. */
+    const UNREADABLE: Array<[string, (config: InternalAxiosRequestConfig) => void]> = [
+      ['헤더가 없음', (config) => void config.headers.delete('Authorization')],
+      ['Bearer 형태가 아님', (config) => void (config.headers.Authorization = accessToken('1'))],
+      ['토큰이 비었음', (config) => void (config.headers.Authorization = 'Bearer ')],
+    ];
+
+    /** 첫 단계가 문 앞에서 기다리고, 답할 때 보낸 토큰을 읽을 수 없게 한다. */
+    function stepOneUnreadable(unreadable: (config: InternalAxiosRequestConfig) => void) {
+      const stepOne = held(() => NO_CONTENT);
+      return {
+        open: stepOne.open,
+        routes: {
+          [WITHDRAW_ACCOUNT]: async (config: InternalAxiosRequestConfig) => {
+            const reply = await stepOne.handler();
+            unreadable(config);
+            return reply;
+          },
+        },
+      };
+    }
+
+    it.each(UNREADABLE)('첫 단계를 기다리는 사이에 로그아웃했고 첫 단계의 응답에서 보낸 토큰을 읽지 못하면(%s) — 둘째 단계를 보내지 않는다. 로그인 화면이 다시 시도할 수 없다고 보인다', async (_, unreadable) => {
+      const stepOne = stepOneUnreadable(unreadable);
+      const { useAuthStore } = await openMyPage({ ...WITHDRAWN, ...stepOne.routes, [LOGOUT]: () => NO_CONTENT });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+      clickLogout();
+      await atPath('/login');
+      await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+
+      stepOne.open();
+
+      await until([UNFINISHED, CANNOT_RETRY], main);
+      await settled();
+      expect(writes()).toEqual([WITHDRAW_ACCOUNT, LOGOUT]);
+      expect(main()).not.toHaveTextContent(DONE);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionFailure: null });
+    });
+
+    it.each(UNREADABLE)('첫 단계를 기다리는 사이에 다른 계정으로 로그인했고 첫 단계의 응답에서 보낸 토큰을 읽지 못하면(%s) — 둘째 단계를 보내지 않는다. 새 세션이 그대로다', async (_, unreadable) => {
+      const stepOne = stepOneUnreadable(unreadable);
+      const { router, useAuthStore } = await openMyPage({ ...WITHDRAWN, ...stepOne.routes, [LOGIN]: () => ok(tokens('B')) });
+      submitWithdrawal();
+      await waitFor(() => expect(sent(WITHDRAW_ACCOUNT)).toHaveLength(1));
+      await loginAsOther(router);
+
+      stepOne.open();
+      await settled();
+      await settled();
+
+      expect(writes()).toEqual([WITHDRAW_ACCOUNT, LOGIN]);
+      expect(useAuthStore.getState()).toMatchObject({
+        accessToken: accessToken('B'),
+        refreshToken: 'RT-B',
+        withdrawal: null,
+        sessionFailure: null,
+      });
+      expect(storedTokens()).toEqual(['RT-B']);
+      expect(pathname()).toBe('/posts');
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('로그인 화면으로 옮기는 사이에 다른 세션이 시작되면 — 그 세션을 지우지 않는다', async () => {
+      const stores = await openMyPage(WITHDRAWN);
+      startsSessionOnArrival(stores);
+
+      submitWithdrawal();
+      await atPath('/login');
+      await settled();
+
+      expect(stores.useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B', withdrawal: null });
+      expect(storedTokens()).toEqual(['RT-B']);
+    });
+  });
+
+  describe('로그인', () => {
+    it('로그인을 낸 뒤에 누른 로그아웃이 끝나면 — 늦은 로그인 응답이 세션이 되지 않고 화면을 옮기지 않는다', async () => {
+      const login = held(() => ok(tokens('B')));
+      const { useAuthStore } = await renderApp('/login', {
+        loggedIn: true,
+        extra: { [LOGIN]: login.handler, [LOGOUT]: () => NO_CONTENT },
+      });
+      submitLogin();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+      clickLogout();
+      await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+
+      login.open();
+      await settled();
+
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+      expect(storedTokens()).toEqual([]);
+      expect(pathname()).toBe('/login');
+      expect(within(banner()).getByRole('link', { name: '로그인' })).toBeInTheDocument();
+    });
+
+    it('로그인을 낸 뒤에 누른 로그아웃이 실패해도 — 늦은 로그인 응답은 세션이 되지 않는다. 앞 세션과 그 안내가 그대로다', async () => {
+      const login = held(() => ok(tokens('B')));
+      const { useAuthStore } = await renderApp('/login', {
+        loggedIn: true,
+        extra: { [LOGIN]: login.handler, [LOGOUT]: () => fail(500, 'C005') },
+      });
+      submitLogin();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+      clickLogout();
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(LOGOUT_FAILED));
+
+      login.open();
+      await settled();
+
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('1'), refreshToken: 'RT-1' });
+      expect(storedTokens()).toEqual(['RT-1']);
+      expect(pathname()).toBe('/login');
+      expect(screen.getByRole('alert')).toHaveTextContent(LOGOUT_FAILED);
+    });
+
+    it('기다리는 사이에 화면을 옮겨 가입을 끝냈으면 — 늦은 응답이 그 세션을 덮지 않고 화면을 옮기지 않는다', async () => {
+      const first = held(() => ok(tokens('A')));
+      const { router, useAuthStore } = await renderApp('/login', {
+        extra: { ...SIGNUP, [LOGIN]: (config) => (emailOf(config) === EMAIL ? ok(tokens('L')) : first.handler()) },
+      });
+      submitLogin();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+      await act(() => router.navigate('/signup'));
+      await until(['계정 만들기'], main);
+      submitAccount();
+      await atPath('/signup/profile');
+
+      first.open();
+      await settled();
+
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('L'), refreshToken: 'RT-L' });
+      expect(storedTokens()).toEqual(['RT-L']);
+      expect(pathname()).toBe('/signup/profile');
+    });
+
+    it('기다리는 사이에 로그인 화면을 다시 열어 다른 계정으로 로그인했으면 — 늦은 응답이 그 세션을 덮지 않고 화면을 옮기지 않는다', async () => {
+      const first = held(() => ok(tokens('A')));
+      const { router, useAuthStore } = await renderApp('/login', {
+        extra: { [LOGIN]: (config) => (emailOf(config) === OTHER_EMAIL ? ok(tokens('B')) : first.handler()) },
+      });
+      submitLogin('first@example.com');
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+      await act(() => router.navigate('/posts'));
+      await loginAsOther(router);
+      await act(() => router.navigate('/me'));
+      await until([ACCOUNT.email], main);
+
+      first.open();
+      await settled();
+
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+      expect(pathname()).toBe('/me');
+    });
+
+    it('앞서 낸 로그인의 응답이 먼저 와도 — 버린다. 나중에 낸 로그인이 세션이 된다', async () => {
+      const first = held(() => ok(tokens('A')));
+      const second = held(() => ok(tokens('B')));
+      const { router, useAuthStore } = await renderApp('/login', {
+        extra: { [LOGIN]: (config) => (emailOf(config) === OTHER_EMAIL ? second.handler() : first.handler()) },
+      });
+      submitLogin('first@example.com');
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+      await act(() => router.navigate('/posts'));
+      await toLoginScreen(router);
+      submitLogin();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(2));
+
+      first.open();
+      await settled();
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+      expect(pathname()).toBe('/login');
+
+      second.open();
+      await atPath('/posts');
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+    });
+
+    it('로그아웃을 기다리는 동안 낸 로그인은 — 로그아웃이 먼저 끝나도 세션이 된다. 세대가 올랐다고 버리지 않는다', async () => {
+      const logout = held(() => NO_CONTENT);
+      const login = held(() => ok(tokens('B')));
+      const { useAuthStore } = await renderApp('/login', {
+        loggedIn: true,
+        extra: { [LOGOUT]: logout.handler, [LOGIN]: login.handler },
+      });
+      clickLogout();
+      await waitFor(() => expect(sent(LOGOUT)).toHaveLength(1));
+      submitLogin();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+
+      logout.open();
+      await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+      login.open();
+
+      await atPath('/posts');
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+      expect(storedTokens()).toEqual(['RT-B']);
+    });
+  });
+
+  describe('가입', () => {
+    /** 다른 계정으로 로그인한 뒤의 화면은 프로필이 있다 — 머리글의 조회가 성공한다. */
+    const SIGNED_IN_ELSEWHERE: Routes = { 'GET /api/v1/members/me': () => ok(PROFILE) };
+    const ACCOUNT_CREATED = (): Reply => ({ status: 201, body: { success: true, data: { accountId: 8, email: EMAIL }, error: null } });
+    /** 계정을 만든 뒤에 멈춘 가입의 안내 — 가입 화면이 아직 떠 있으면 그 자리에 보인다. */
+    const CREATED_NOTICE = `${EMAIL} 계정을 만들었습니다. 이 이메일로 로그인해 주세요.`;
+    /** 어느 화면의 것이든 계정을 만들었다는 안내 — 로그인 화면의 안내(가입의 로그인이 실패함)도 이 말로 시작한다. */
+    const CREATED = '계정을 만들었습니다';
+    const signupButton = () => within(main()).getByRole('button', { name: '계정 만들기' });
+
+    it('계정 생성을 기다리는 사이에 다른 계정으로 로그인했으면 — 가입의 로그인을 보내지 않는다. 그 세션이 그대로다', async () => {
+      const account = held(ACCOUNT_CREATED);
+      const { router, useAuthStore } = await renderApp('/signup', {
+        extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [CREATE_ACCOUNT]: account.handler, [LOGIN]: () => ok(tokens('B')) },
+      });
+      submitAccount();
+      await waitFor(() => expect(sent(CREATE_ACCOUNT)).toHaveLength(1));
+      await loginAsOther(router);
+
+      account.open();
+      await settled();
+
+      expect(loginEmails()).toEqual([OTHER_EMAIL]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+      expect(storedTokens()).toEqual(['RT-B']);
+      expect(pathname()).toBe('/posts');
+      // 가입 화면을 떠났다 — 계정을 만들었다는 안내를 옮겨 간 화면에 보이지 않는다.
+      expect(document.body).not.toHaveTextContent(CREATED);
+    });
+
+    it('계정 생성을 기다리는 사이에 낸 로그인이 아직 돌아도 — 가입의 로그인을 보내지 않는다. 나중에 낸 로그인이 세션이 된다', async () => {
+      const account = held(ACCOUNT_CREATED);
+      const login = held(() => ok(tokens('B')));
+      const { router, useAuthStore } = await renderApp('/signup', {
+        extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [CREATE_ACCOUNT]: account.handler, [LOGIN]: login.handler },
+      });
+      submitAccount();
+      await waitFor(() => expect(sent(CREATE_ACCOUNT)).toHaveLength(1));
+      await toLoginScreen(router);
+      submitLogin();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+
+      account.open();
+      await settled();
+      expect(loginEmails()).toEqual([OTHER_EMAIL]);
+      expect(document.body).not.toHaveTextContent(CREATED);
+
+      login.open();
+      await atPath('/posts');
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+    });
+
+    it('가입의 로그인을 기다리는 사이에 다른 계정으로 로그인했으면 — 늦은 응답이 그 세션을 덮지 않고 화면을 옮기지 않는다', async () => {
+      const login = held(() => ok(tokens('L')));
+      const { router, useAuthStore } = await renderApp('/signup', {
+        extra: {
+          ...SIGNUP,
+          ...SIGNED_IN_ELSEWHERE,
+          [LOGIN]: (config) => (emailOf(config) === EMAIL ? login.handler() : ok(tokens('B'))),
+        },
+      });
+      submitAccount();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+      await loginAsOther(router);
+
+      login.open();
+      await settled();
+
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+      expect(storedTokens()).toEqual(['RT-B']);
+      expect(pathname()).toBe('/posts');
+      expect(document.body).not.toHaveTextContent(CREATED);
+    });
+
+    it('가입의 로그인이 다른 계정으로 로그인한 뒤에 실패하면 — 로그인 화면으로 끌어가지 않고 안내를 남기지 않는다', async () => {
+      const login = held(() => fail(500, 'C005'));
+      const { router, useAuthStore } = await renderApp('/signup', {
+        extra: {
+          ...SIGNUP,
+          ...SIGNED_IN_ELSEWHERE,
+          [LOGIN]: (config) => (emailOf(config) === EMAIL ? login.handler() : ok(tokens('B'))),
+        },
+      });
+      submitAccount();
+      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
+      await loginAsOther(router);
+
+      login.open();
+      await settled();
+
+      expect(pathname()).toBe('/posts');
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), signupLoginFailure: null });
+      expect(document.body).not.toHaveTextContent('계정을 만들었습니다.');
+    });
+
+    /**
+     * 로그인한 채로 가입을 내고, 그 응답을 기다리는 사이에 누른 로그아웃이 실패한다 — 가입은 멈추고(로그아웃도 누를 때 로그인 번호를 올린다)
+     * 가입 화면은 그대로 떠 있다.
+     */
+    it.each([
+      ['계정 생성', CREATE_ACCOUNT, ACCOUNT_CREATED, [CREATE_ACCOUNT, LOGOUT]],
+      ['가입의 로그인(그 응답은 성공)', LOGIN, (): Reply => ok(tokens('L')), [CREATE_ACCOUNT, LOGIN, LOGOUT]],
+      ['가입의 로그인(그 응답은 실패)', LOGIN, (): Reply => fail(500, 'C005'), [CREATE_ACCOUNT, LOGIN, LOGOUT]],
+    ])('%s을 기다리는 사이에 누른 로그아웃이 실패해 가입 화면에 머물면 — 계정을 만들었다는 것과 그 이메일로 로그인하라고 보이고 계정 만들기 버튼이 막힌다. 세션은 그대로다', async (_, key, reply, expected) => {
+      const answer = held(reply);
+      const { useAuthStore } = await renderApp('/signup', {
+        loggedIn: true,
+        extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [key]: answer.handler, [LOGOUT]: () => fail(500, 'C005') },
+      });
+      submitAccount();
+      await waitFor(() => expect(sent(key)).toHaveLength(1));
+      clickLogout();
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(LOGOUT_FAILED));
+
+      answer.open();
+
+      await until([CREATED_NOTICE], main);
+      expect(within(main()).getByRole('link', { name: '로그인하기' })).toHaveAttribute('href', '/login');
+      expect(signupButton()).toBeDisabled();
+      expect(writes()).toEqual(expected);
+      expect(pathname()).toBe('/signup');
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('1'), refreshToken: 'RT-1', signupLoginFailure: null });
+      expect(storedTokens()).toEqual(['RT-1']);
+
+      // 안내는 만든 계정의 이메일이다 — 멈춘 뒤 이메일 칸을 고쳐도 그 칸의 값으로 바뀌지 않는다.
+      type(within(main()).getByLabelText(/^이메일/), OTHER_EMAIL);
+      expect(main()).toHaveTextContent(CREATED_NOTICE);
+      expect(main()).not.toHaveTextContent(`${OTHER_EMAIL} 계정을 만들었습니다`);
+    });
+
+    it('계정 생성이 실패하면 — 누른 로그아웃이 실패해 멈췄어도 그 실패를 보이고 계정을 만들었다는 안내가 없다. 계정 만들기 버튼은 막히지 않는다', async () => {
+      const account = held(() => fail(500, 'C005'));
+      await renderApp('/signup', {
+        loggedIn: true,
+        extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [CREATE_ACCOUNT]: account.handler, [LOGOUT]: () => fail(500, 'C005') },
+      });
+      submitAccount();
+      await waitFor(() => expect(sent(CREATE_ACCOUNT)).toHaveLength(1));
+      clickLogout();
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(LOGOUT_FAILED));
+
+      account.open();
+
+      await until([ERROR_SENTENCES.C005.text], main);
+      expect(main()).not.toHaveTextContent(CREATED);
+      expect(signupButton()).toBeEnabled();
+      expect(writes()).toEqual([CREATE_ACCOUNT, LOGOUT]);
+    });
+
+    it('계정 생성을 기다리는 사이에 로그아웃했으면 — 가입 화면을 떠났으므로 옮겨 간 로그인 화면에 계정을 만들었다는 안내가 없고 가입 화면으로 끌어오지 않는다. 토큰도 쓰지 않는다', async () => {
+      const account = held(ACCOUNT_CREATED);
+      const { useAuthStore } = await renderApp('/signup', {
+        loggedIn: true,
+        extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [CREATE_ACCOUNT]: account.handler, [LOGOUT]: () => NO_CONTENT },
+      });
+      submitAccount();
+      await waitFor(() => expect(sent(CREATE_ACCOUNT)).toHaveLength(1));
+      clickLogout();
+      await atPath('/login');
+      await until(['계정이 없으면'], main);
+      await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+
+      account.open();
+      await settled();
+
+      expect(writes()).toEqual([CREATE_ACCOUNT, LOGOUT]);
+      expect(pathname()).toBe('/login');
+      expect(document.body).not.toHaveTextContent(CREATED);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, signupLoginFailure: null });
+      expect(storedTokens()).toEqual([]);
+    });
+  });
+});
+
+/**
+ * 로그아웃과 탈퇴는 로그인 화면으로 `flushSync` 로 옮겨 떠나는 화면을 캐시를 비우는 커밋 뒤에 남기지 않는다. 없으면 옮기기가 전환으로 미뤄져
+ * 떠나는 화면이 비운 캐시로 다시 묻는다(lib/queryClient.ts) — 글 상세는 조회할 때마다 조회수가 오른다. 로그아웃의 저장된 조회수는
+ * e2e/live/flows.spec.ts 가 본다.
+ */
+describe('로그아웃과 탈퇴 — 떠나는 화면', () => {
+  const POST = {
+    id: 1,
+    title: '글 제목',
+    writerId: PROFILE.accountId,
+    writerNickname: PROFILE.nickname,
+    viewCount: 3,
+    commentCount: 0,
+    createdAt: '2026-10-27T10:00:00',
+    content: '글 본문',
+  };
+  const ON_DETAIL: Routes = {
+    'GET /api/v1/posts/1': () => ok(POST),
+    'GET /api/v1/posts/1/comments': () => ok({ ...EMPTY_PAGE, size: 20 }),
+  };
+
+  it.each([
+    ['글 상세', '/posts/1', POST.content],
+    ['글 목록', '/posts', '등록된 게시글이 없습니다'],
+    ['마이페이지', '/me', ACCOUNT.email],
+  ])('%s 에서 로그아웃하면 — 로그아웃 요청만 나간다. 떠나는 화면이 다시 묻지 않는다', async (_, path, drawn) => {
+    const { useAuthStore } = await renderApp(path, { loggedIn: true, extra: { ...ON_DETAIL, [LOGOUT]: () => NO_CONTENT } });
+    await until([drawn], main);
+    await until([PROFILE.nickname], banner);
+    requests.length = 0;
+
+    clickLogout();
+
+    await atPath('/login');
+    await until(['계정이 없으면'], main);
+    await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+    await settled();
+    expect(requests.map((r) => r.key)).toEqual([LOGOUT]);
+  });
+
+  it('탈퇴를 기다리는 사이에 글 상세로 옮겼으면 — 탈퇴가 끝나도 떠나는 상세가 다시 묻지 않는다', async () => {
+    const stepTwo = held(() => NO_CONTENT);
+    const { router, useAuthStore } = await openMyPage({ ...WITHDRAWN, ...ON_DETAIL, [WITHDRAW_PROFILE]: stepTwo.handler });
+    submitWithdrawal();
+    await waitFor(() => expect(sent(WITHDRAW_PROFILE)).toHaveLength(1));
+    await act(() => router.navigate('/posts/1'));
+    await until([POST.content], main);
+    requests.length = 0;
+
+    stepTwo.open();
+
+    await atPath('/login');
+    await until([DONE], main);
+    await settled();
+    expect(requests.map((r) => r.key)).toEqual([]);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+  });
+});
+
+/**
+ * 요청을 기다리는 사이에 화면을 떠났으면 늦은 응답이 사용자를 다른 화면으로 끌어가지 않는다 — 내려간 화면의 `navigate` 도 라우터를 움직인다.
+ * 보호된 화면은 세션이 바뀌면 내려가므로 세션을 따로 보지 않는다.
+ */
+describe('요청을 기다리는 사이에 떠난 화면', () => {
+  const CREATE_POST = 'POST /api/v1/posts';
+  const UPDATE_POST = 'PUT /api/v1/posts/1';
+  const DELETE_POST = 'DELETE /api/v1/posts/1';
+  const POST = {
+    id: 1,
+    title: '글 제목',
+    writerId: PROFILE.accountId,
+    writerNickname: PROFILE.nickname,
+    viewCount: 3,
+    commentCount: 0,
+    createdAt: '2026-10-27T10:00:00',
+    content: '글 본문',
+  };
+  const ON_DETAIL: Routes = {
+    'GET /api/v1/posts/1': () => ok(POST),
+    'GET /api/v1/posts/1/comments': () => ok({ ...EMPTY_PAGE, size: 20 }),
+  };
+  const CREATED = (): Reply => ({ status: 201, body: { success: true, data: POST, error: null } });
+  const REGISTERED = (): Reply => ({ status: 201, body: { success: true, data: PROFILE, error: null } });
+
+  function submitPost() {
+    type(screen.getByLabelText(/^제목/), '새 제목');
+    type(screen.getByLabelText(/^본문/), '새 본문');
+    fireEvent.submit(main().querySelector('form')!);
+  }
+
+  function submitProfile() {
+    type(screen.getByLabelText(/^닉네임/), '새닉네임');
+    fireEvent.submit(main().querySelector('form')!);
+  }
+
+  const clickDelete = () => fireEvent.click(within(main()).getByRole('button', { name: /삭제/ }));
+
+  /** 화면을 열고 다 그려질 때까지 기다린다. */
+  async function open(path: string, drawn: string, extra: Routes) {
+    const stores = await renderApp(path, { loggedIn: true, extra: { ...ON_DETAIL, ...extra } });
+    await until([drawn], main);
+    return stores;
+  }
+  const NEW_POST_DRAWN = '작성에는 프로필이 필요합니다';
+  const EDIT_FILLED = () => waitFor(() => expect(screen.getByLabelText(/^제목/)).toHaveValue(POST.title));
+
+  async function leaveTo(router: Stores['router'], path: string, drawn: string) {
+    await act(() => router.navigate(path));
+    await until([drawn], main);
+  }
+
+  describe('떠나지 않았으면 옮겨 간다', () => {
+    it('새 글 — 그 글로 간다', async () => {
+      await open('/posts/new', NEW_POST_DRAWN, { [CREATE_POST]: CREATED });
+
+      submitPost();
+
+      await atPath('/posts/1');
+    });
+
+    it('글 수정 — 그 글로 간다', async () => {
+      await open('/posts/1/edit', '글 수정', { [UPDATE_POST]: () => ok(POST) });
+      await EDIT_FILLED();
+
+      submitPost();
+
+      await atPath('/posts/1');
+    });
+
+    it('글 삭제 — 목록으로 간다', async () => {
+      await open('/posts/1', POST.content, { [DELETE_POST]: () => NO_CONTENT });
+
+      clickDelete();
+
+      await atPath('/posts');
+    });
+
+    it('프로필 등록 — 목록으로 간다', async () => {
+      await open('/signup/profile', '프로필 등록', { [CREATE_PROFILE]: REGISTERED });
+
+      submitProfile();
+
+      await atPath('/posts');
+    });
+  });
+
+  it('새 글 — 낸 뒤에 화면을 떠났으면 늦은 응답이 그 글로 끌어가지 않는다', async () => {
+    const created = held(CREATED);
+    const { router } = await open('/posts/new', NEW_POST_DRAWN, { [CREATE_POST]: created.handler });
+    submitPost();
+    await waitFor(() => expect(sent(CREATE_POST)).toHaveLength(1));
+    await leaveTo(router, '/posts', '등록된 게시글이 없습니다');
+
+    created.open();
+    await settled();
+
+    expect(pathname()).toBe('/posts');
+  });
+
+  it('새 글 — 로그아웃하고 다른 계정으로 로그인해 같은 화면을 다시 열었어도 앞 세션의 늦은 응답이 끌어가지 않는다', async () => {
+    const created = held(CREATED);
+    const { router, useAuthStore } = await open('/posts/new', NEW_POST_DRAWN, {
+      [CREATE_POST]: created.handler,
+      [LOGOUT]: () => NO_CONTENT,
+    });
+    submitPost();
+    await waitFor(() => expect(sent(CREATE_POST)).toHaveLength(1));
+    clickLogout();
+    await atPath('/login');
+    await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+    act(() => useAuthStore.getState().setTokens(tokens('B')));
+    await leaveTo(router, '/posts/new', NEW_POST_DRAWN);
+
+    created.open();
+    await settled();
+
+    expect(pathname()).toBe('/posts/new');
+    expect(useAuthStore.getState().accessToken).toBe(accessToken('B'));
+  });
+
+  it('글 수정 — 낸 뒤에 화면을 떠났으면 늦은 응답이 그 글로 끌어가지 않는다', async () => {
+    const updated = held(() => ok(POST));
+    const { router } = await open('/posts/1/edit', '글 수정', { [UPDATE_POST]: updated.handler });
+    await EDIT_FILLED();
+    submitPost();
+    await waitFor(() => expect(sent(UPDATE_POST)).toHaveLength(1));
+    await leaveTo(router, '/posts', '등록된 게시글이 없습니다');
+
+    updated.open();
+    await settled();
+
+    expect(pathname()).toBe('/posts');
+  });
+
+  it('글 삭제 — 누른 뒤에 화면을 떠났으면 늦은 응답이 목록으로 끌어가지 않는다', async () => {
+    const removed = held(() => NO_CONTENT);
+    const { router } = await open('/posts/1', POST.content, { [DELETE_POST]: removed.handler });
+    clickDelete();
+    await waitFor(() => expect(sent(DELETE_POST)).toHaveLength(1));
+    await leaveTo(router, '/me', ACCOUNT.email);
+
+    removed.open();
+    await settled();
+
+    expect(pathname()).toBe('/me');
+  });
+
+  it('프로필 등록 — 낸 뒤에 화면을 떠났으면 늦은 응답이 목록으로 끌어가지 않는다', async () => {
+    const registered = held(REGISTERED);
+    const { router } = await open('/signup/profile', '프로필 등록', { [CREATE_PROFILE]: registered.handler });
+    submitProfile();
+    await waitFor(() => expect(sent(CREATE_PROFILE)).toHaveLength(1));
+    await leaveTo(router, '/me', ACCOUNT.email);
+
+    registered.open();
+    await settled();
+
+    expect(pathname()).toBe('/me');
   });
 });

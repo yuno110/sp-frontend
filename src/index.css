@@ -53,7 +53,8 @@
   /* success-50 위의 글자다 — 그 위에서 대비가 4.5:1 이상이다(F-05). */
   --color-success-600: #19783f;
   --color-warn-50: #fdf5e6;
-  --color-warn-600: #a56a0b;
+  /* warn-50 뿐 아니라 어느 면 위에서도 4.5:1 이상이다 — 값으로 계산해 tokens.test.ts 가 본다. */
+  --color-warn-600: #98620a;
 }
 
 html,

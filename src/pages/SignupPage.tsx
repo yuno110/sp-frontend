@@ -9,8 +9,9 @@ import { fieldMessages } from '@/lib/api/client';
 import type { TokenResponse } from '@/lib/api/types';
 import { withoutRequestBody } from '@/lib/api/withoutRequestBody';
 import { DEV_ONLY } from '@/lib/devOnly';
-import { useAuthStore } from '@/stores/authStore';
-import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
+import { useMounted } from '@/lib/useMounted';
+import { beginLogin, useAuthStore } from '@/stores/authStore';
+import { Button, ErrorBox, Field, Input, Panel, RecoveryLink } from '@/components/ui';
 
 /**
  * 가입. **사용자가 내는 것은 계정 정보와 닉네임이다** — 사이의 로그인은 화면이 방금 입력한 비밀번호로 한다
@@ -76,7 +77,7 @@ function useSubmit() {
     run(async () => {
       setChecked(null);
       const { available } = await fn();
-      setChecked(available ? `쓸 수 있는 ${what}이다` : `이미 쓰이고 있는 ${what}이다`);
+      setChecked(available ? `쓸 수 있는 ${what}입니다` : `이미 쓰이고 있는 ${what}입니다`);
     });
 
   return { busy, error, checked, run, check };
@@ -90,8 +91,8 @@ function Checked({ text }: { text: string | null }) {
 
 /**
  * 가입의 첫 화면 — 계정을 만들고 같은 비밀번호로 바로 로그인한다. **비밀번호는 이 화면의 입력값에만 둔다** — 이 화면이
- * 쥐는 오류는 요청 본문을 비운 사본이다(`useSubmit`). 로그인 요청이 끝나면 어느 쪽이든 다른 화면으로 가고
- * (`/signup/profile` 은 다른 컴포넌트다) 이 화면과 함께 입력값이 사라진다. 저장소에도, 다음 화면에 넘기는 값에도 두지 않는다.
+ * 쥐는 오류는 요청 본문을 비운 사본이다(`useSubmit`). 다음 화면으로 가면(`/signup/profile` 은 다른 컴포넌트다) 이 화면과 함께
+ * 입력값이 사라진다. 저장소에도, 다음 화면에 넘기는 값에도 두지 않는다.
  */
 export function SignupPage() {
   const navigate = useNavigate();
@@ -99,21 +100,31 @@ export function SignupPage() {
   const { busy, error, checked, run, check } = useSubmit();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // 멈춘 가입이 만든 계정의 이메일 — 아래 `submit`.
+  const [created, setCreated] = useState<string | null>(null);
 
-  // 계정 생성이 실패하면 이 화면에 남는다 — 로그인하지 않는다.
+  // 계정 생성이 실패하면 이 화면에 남는다 — 로그인하지 않는다. 그 사이 다른 로그인이나 로그아웃을 시작했으면 여기서 멈춘다 — 그 응답을
+  // 세션으로 삼지 않는다. 만든 계정은 그대로이고 1단계만 끝난 상태는 정상이다(api-contract.md §9.1). 계정을 만든 뒤에 멈췄으면 이 화면이
+  // 아직 떠 있을 때 그 사실과 할 일을 보이고 제출 버튼을 막는다. 떠났으면 보이지 않는다 — 내려간 화면의 상태는 바뀌지 않는다. 어느 쪽이든
+  // 옮기지도 토큰을 쓰지도 않는다.
   const submit = () =>
     run(async () => {
+      const latest = beginLogin();
       await createAccount(email, password);
+      const stopped = () => setCreated(email);
+      if (!latest()) return stopped();
       let tokens: TokenResponse;
       try {
         tokens = await login(email, password);
       } catch (e) {
+        if (!latest()) return stopped();
         // 계정은 만들어졌다. 1단계만 끝난 상태는 정상이므로 로그인 화면으로 보내고 그 화면이 이 실패를 보인다. 스토어는
         // 요청 본문(비밀번호)을 비운 사본만 남긴다(stores/authStore.ts).
         useAuthStore.getState().setSignupLoginFailure(e);
         navigate('/login', { replace: true });
         return;
       }
+      if (!latest()) return stopped();
       setTokens(tokens);
       navigate('/signup/profile', { replace: true });
     });
@@ -146,7 +157,13 @@ export function SignupPage() {
           </Field>
           <Checked text={checked} />
           <ErrorBox error={error} inlineFields={['email', 'password']} />
-          <Button type="submit" variant="primary" disabled={busy} className="w-full justify-center">
+          {created !== null ? (
+            // 이메일은 띄어쓰기 없이 길 수 있다 — 줄을 바꾸지 않으면 좁은 화면에서 가로로 스크롤된다(F-05).
+            <p className="text-sm text-default wrap-anywhere">
+              {created} 계정을 만들었습니다. 이 이메일로 로그인해 주세요. <RecoveryLink recovery="login" />
+            </p>
+          ) : null}
+          <Button type="submit" variant="primary" disabled={busy || created !== null} className="w-full justify-center">
             {busy ? '보내는 중…' : '계정 만들기'}
           </Button>
         </form>
@@ -161,6 +178,7 @@ export function SignupPage() {
  */
 export function SignupProfilePage() {
   const navigate = useNavigate();
+  const mounted = useMounted();
   const queryClient = useQueryClient();
   const accountId = useAuthStore((s) => s.accountId);
   const { busy, error, checked, run, check } = useSubmit();
@@ -171,7 +189,7 @@ export function SignupProfilePage() {
       await createProfile(nickname);
       // 머리글의 닉네임은 내 프로필 조회에서 온다(components/Layout.tsx) — 등록 전에 받은 「프로필 없음」을 남기지 않는다.
       await queryClient.invalidateQueries({ queryKey: ['member', 'me'] });
-      navigate('/posts');
+      if (mounted.current) navigate('/posts');
     });
 
   return (
@@ -210,7 +228,7 @@ export function SignupProfilePage() {
           </Button>
         </form>
         <p className="mt-3 text-xs text-faint">
-          나중에 등록해도 된다 — 프로필이 없으면 글과 댓글만 쓸 수 없다.
+          나중에 등록해도 됩니다 — 프로필이 없으면 글과 댓글만 쓸 수 없습니다.
         </p>
       </Panel>
     </div>

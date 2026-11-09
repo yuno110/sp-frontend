@@ -171,7 +171,7 @@ describe('머리글', () => {
   it('프로덕션 모드 — 확인용 배지·claim·토큰 실험 링크·요청 기록 패널이 없다', async () => {
     await renderApp('prod', '/posts', { loggedIn: true });
     await until(banner, ['테스트닉']);
-    await until(main, ['등록된 게시글이 없다']);
+    await until(main, ['등록된 게시글이 없습니다']);
 
     expect(screen.queryByText('백엔드 확인용 화면')).toBeNull();
     expect(marksIn(banner())).toEqual([]);
@@ -183,7 +183,7 @@ describe('머리글', () => {
   it('개발 모드 — 배지만 없고 나머지는 있다', async () => {
     await renderApp('dev', '/posts', { loggedIn: true });
     await until(banner, ['테스트닉']);
-    await until(main, ['등록된 게시글이 없다']);
+    await until(main, ['등록된 게시글이 없습니다']);
 
     expect(screen.queryByText('백엔드 확인용 화면')).toBeNull();
     expect(marksIn(banner())).not.toEqual([]);
@@ -209,7 +209,7 @@ describe.each([
     screenName: '글 상세',
     path: '/posts/1',
     loggedIn: true,
-    ready: ['첫 글', '댓글이 없다'],
+    ready: ['첫 글', '댓글이 없습니다'],
     devOnly: [`· sub ${WRITER_ID} ·`],
   },
   {
@@ -223,7 +223,7 @@ describe.each([
     screenName: '가입 — 프로필 등록',
     path: '/signup/profile',
     loggedIn: true,
-    ready: ['나중에 등록해도 된다'],
+    ready: ['나중에 등록해도 됩니다'],
     devOnly: [`sub (= ${ACCOUNT_ID})`],
   },
 ])('$screenName', ({ path, loggedIn, ready, devOnly }) => {

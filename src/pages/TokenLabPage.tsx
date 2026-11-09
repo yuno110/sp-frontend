@@ -33,7 +33,7 @@ const TARGETS = [
 export function TokenLabPage() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const refreshToken = useAuthStore((s) => s.refreshToken);
-  const setTokens = useAuthStore((s) => s.setTokens);
+  const setReissuedTokens = useAuthStore((s) => s.setReissuedTokens);
   const [target, setTarget] = useState(TARGETS[0].path);
   // 회전으로 밀려난 직전 Refresh Token. 스토어는 새 것으로 덮이므로 여기 따로 둔다.
   const [usedRefreshToken, setUsedRefreshToken] = useState<string | null>(null);
@@ -124,14 +124,18 @@ export function TokenLabPage() {
                 const sent = refreshToken;
                 try {
                   const next = await reissue(sent);
-                  setTokens(next);
+                  // 같은 세션이 이어지는 것이다 — 세션을 바꾸지 않는다. 그 사이 토큰이 바뀌었으면 저장하지 않는다. 같은 초의 재로그인은 문자열이
+                  // 같아 저장한다(requirements/member.md §6.2).
+                  const unchanged = useAuthStore.getState().refreshToken === sent;
+                  if (unchanged) setReissuedTokens(next);
                   setUsedRefreshToken(sent);
                   const rotated = next.refreshToken !== sent;
                   setResultKind(rotated ? 'ok' : 'unexpected');
                   setResult(
-                    rotated
+                    (rotated
                       ? `재발급 성공 — refreshToken 이 회전했다. accessTokenExpiresIn ${next.accessTokenExpiresIn}s`
-                      : '재발급 성공 — 그런데 refreshToken 이 그대로다 (회전이 안 됐다)',
+                      : '재발급 성공 — 그런데 refreshToken 이 그대로다 (회전이 안 됐다)') +
+                      (unchanged ? '' : ' — 그 사이 토큰이 바뀌어 저장하지 않았다'),
                   );
                 } catch (e) {
                   setError(e);

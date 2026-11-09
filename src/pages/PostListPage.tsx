@@ -119,7 +119,7 @@ export function PostListPage() {
           <Pager page={query.data} onChange={setPage} />
         </>
       ) : query.data ? (
-        <Empty>{applied ? '검색 결과가 없다' : '등록된 게시글이 없다'}</Empty>
+        <Empty>{applied ? '검색 결과가 없습니다' : '등록된 게시글이 없습니다'}</Empty>
       ) : null}
     </div>
   );

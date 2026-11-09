@@ -11,9 +11,11 @@ import {
   updateComment,
 } from '@/features/board/api';
 import { COMMENT_CONTENT_MAX } from '@/features/board/types';
+import { useNoProfileMeanings } from '@/features/member/useNoProfileMeanings';
 import { fieldMessages } from '@/lib/api/client';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { formatDateTime } from '@/lib/format';
+import { useMounted } from '@/lib/useMounted';
 import { useAuthStore } from '@/stores/authStore';
 import { Button, Empty, ErrorBox, FieldErrors, Panel, Textarea } from '@/components/ui';
 import { Pager } from '@/components/Pager';
@@ -43,6 +45,7 @@ export function PostDetailPage() {
   // 경로 변수를 그대로 쓴다 — 숫자가 아니면 서버가 400 C002 로 답하고, 그것이 보여야 한다.
   const postId = id ?? '';
   const navigate = useNavigate();
+  const mounted = useMounted();
   const queryClient = useQueryClient();
   const { accountId, role, accessToken } = useAuthStore();
   const loggedIn = accessToken !== null;
@@ -52,6 +55,8 @@ export function PostDetailPage() {
   const [editing, setEditing] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [failure, setFailure] = useState<Failure | null>(null);
+  const addFailure = failure?.action === 'add' ? failure.error : null;
+  const addMeanings = useNoProfileMeanings(addFailure);
 
   const post = useQuery({
     queryKey: ['post', postId],
@@ -101,7 +106,9 @@ export function PostDetailPage() {
 
   const removePost = useMutation({
     mutationFn: () => deletePost(postId),
-    onSuccess: () => navigate('/posts'),
+    onSuccess: () => {
+      if (mounted.current) navigate('/posts');
+    },
     onError: (error) => setFailure({ action: 'remove', error }),
   });
 
@@ -131,8 +138,9 @@ export function PostDetailPage() {
       <Panel>
         {/* 띄어쓰기 없는 긴 낱말(붙여 넣은 주소)도 줄을 바꾼다(`wrap-anywhere`) — 안 바꾸면 본문 영역이 가로로
             스크롤된다(F-05). 아래 본문과 댓글도 같다. */}
-        <header className="flex items-start justify-between gap-4">
-          <div>
+        {/* 좁은 폭에서는 버튼을 제목 아래로 내린다 — 옆에 두면 제목이 버튼에 밀려 몇 글자씩 줄을 바꾼다. */}
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+          <div className="min-w-0">
             <h1 className="text-lg font-bold text-default wrap-anywhere">{post.data.title}</h1>
             <p className="mt-1 text-xs text-muted">
               <Link to={`/members/${post.data.writerId}`} className="hover:text-accent-600">
@@ -244,7 +252,7 @@ export function PostDetailPage() {
             })}
           </ul>
         ) : comments.data ? (
-          <Empty>댓글이 없다</Empty>
+          <Empty>댓글이 없습니다</Empty>
         ) : null}
 
         {comments.data && comments.data.totalPages > 1 ? (
@@ -256,10 +264,7 @@ export function PostDetailPage() {
         <div className="mt-4 space-y-2 border-t border-line-soft pt-4">
           {/* 작성 실패는 작성란 밖에 둔다 — 실패가 세션을 끝내면(A003 뒤 재발급 거부) 작성란이 사라지는데,
               그때도 무엇이 났고 어디로 가면 되는지는 남아야 한다. */}
-          <ErrorBox
-            error={failure?.action === 'add' ? failure.error : null}
-            inlineFields={loggedIn ? COMMENT_FIELDS : []}
-          />
+          <ErrorBox error={addFailure} meanings={addMeanings} inlineFields={loggedIn ? COMMENT_FIELDS : []} />
           {loggedIn ? (
             <form
               className="space-y-2"
@@ -275,12 +280,10 @@ export function PostDetailPage() {
                 placeholder={`댓글 (최대 ${COMMENT_CONTENT_MAX}자)`}
                 onChange={(e) => setDraft(e.target.value)}
               />
-              <FieldErrors
-                messages={failure?.action === 'add' ? fieldMessages(failure.error, 'content') : []}
-              />
+              <FieldErrors messages={fieldMessages(addFailure, 'content')} />
               <div className="flex items-center justify-between">
                 <span className="text-xs text-faint">
-                  {draft.length} / {COMMENT_CONTENT_MAX} · 작성에는 프로필이 필요하다
+                  {draft.length} / {COMMENT_CONTENT_MAX} · 작성에는 프로필이 필요합니다
                 </span>
                 <Button type="submit" variant="primary" disabled={addComment.isPending}>
                   등록

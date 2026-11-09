@@ -23,8 +23,8 @@ export interface Reply {
   body?: unknown;
 }
 
-/** 요청 하나의 답. 함수면 요청을 보고 답한다 — 앞선 요청에 따라 답이 바뀌는 흐름(가입)이 쓴다. */
-export type Answer = Reply | ((request: Request) => Reply);
+/** 요청 하나의 답. 함수면 요청을 보고 답한다 — 앞선 요청에 따라 답이 바뀌는 흐름(가입)이 쓴다. 답을 미루려면 Promise 를 돌려준다. */
+export type Answer = Reply | ((request: Request) => Reply | Promise<Reply>);
 
 /** `METHOD 경로` → 답. 쿼리는 키에 넣지 않는다. */
 export type Routes = Record<string, Answer>;
@@ -39,7 +39,9 @@ const ERRORS = {
   C005: { status: 500, message: '서버 내부 오류가 발생했습니다.' },
   A002: { status: 401, message: '유효하지 않은 토큰입니다.' },
   M001: { status: 404, message: '프로필을 찾을 수 없습니다.' },
+  M007: { status: 409, message: '탈퇴한 프로필입니다.' },
   P001: { status: 404, message: '게시글을 찾을 수 없습니다.' },
+  S002: { status: 403, message: '프로필 등록이 필요합니다.' },
   AU003: { status: 401, message: '이메일 또는 비밀번호가 일치하지 않습니다.' },
 } as const;
 
@@ -125,6 +127,17 @@ export const COMMENTS = [
 
 export const MY_PROFILE = { accountId: ME.accountId, nickname: NICKNAME };
 
+/** 내 프로필이 탈퇴한 상태 — `GET /members/me` 는 프로필이 없을 때와 같은 404 `M001` 이고 공개 조회가 `deleted` 로 가른다(§3.1). */
+export const MY_PROFILE_WITHDRAWN: Routes = {
+  'GET /api/v1/members/me': fail('M001'),
+  [`GET /api/v1/members/${ME.accountId}`]: ok({
+    accountId: ME.accountId,
+    nickname: '탈퇴한 회원',
+    createdAt: '2026-10-01T09:00:00',
+    deleted: true,
+  }),
+};
+
 /** 기본 답. 테스트가 `use` 로 덮는다. */
 const BASE: Routes = {
   'GET /api/v1/posts': ok(pageOf([POST, OTHER_POST])),
@@ -178,7 +191,7 @@ export class ApiStub {
         await route.abort();
         return;
       }
-      const reply = typeof answer === 'function' ? answer(request) : answer;
+      const reply = typeof answer === 'function' ? await answer(request) : answer;
       await route.fulfill({
         status: reply.status,
         headers: { 'Access-Control-Allow-Origin': stub.origin },

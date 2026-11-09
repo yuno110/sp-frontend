@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { changePassword, getMyAccount, withdrawAccount } from '@/features/auth/api';
 import { getMyProfile, updateNickname, withdrawProfile } from '@/features/member/api';
-import { errorOf, fieldMessages } from '@/lib/api/client';
+import { useNoProfileMeanings } from '@/features/member/useNoProfileMeanings';
+import { errorOf, fieldMessages, sentAccessToken } from '@/lib/api/client';
 import { AFTER_WITHDRAWAL, MY_PROFILE } from '@/lib/api/errorCodes';
 import { withoutRequestBody } from '@/lib/api/withoutRequestBody';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { formatDateTime } from '@/lib/format';
-import { useAuthStore } from '@/stores/authStore';
+import { useAuthStore, watchSession } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel } from '@/components/ui';
 
 /**
@@ -36,6 +37,7 @@ export function MyPage() {
 
   const account = useQuery({ queryKey: ['account', 'me'], queryFn: getMyAccount, retry: false });
   const profile = useQuery({ queryKey: ['member', 'me'], queryFn: getMyProfile, retry: false });
+  const profileMeanings = useNoProfileMeanings(profile.error, MY_PROFILE);
   // 입력칸 옆에 오류를 그리는 필드 — 닉네임 입력칸은 프로필 조회가 실패하면 그려지지 않는다. 탈퇴의 오류는 탈퇴 칸이 따로 그린다.
   const inlineFields = ['currentPassword', 'newPassword', ...(profile.isError ? [] : ['nickname'])];
 
@@ -53,37 +55,54 @@ export function MyPage() {
 
   /**
    * 탈퇴. 비밀번호를 한 번 받아 계정 탈퇴 → 프로필 탈퇴를 부른다(api-contract.md §9.1.1). 프로필 탈퇴는 계정 탈퇴에서 쓰던
-   * Access Token 으로 나간다 — 계정 탈퇴가 Refresh Token 을 지워 재발급되지 않으므로 **토큰은 끝난 뒤에 지운다.**
+   * Access Token 으로 나간다 — 계정 탈퇴가 Refresh Token 을 지워 재발급되지 않으므로 **토큰은 끝난 뒤에 지운다.** 세션이 그대로면 지금
+   * 토큰이고(그 사이 재발급을 받았으면 받은 토큰이다), 세션이 끝났거나 바뀌었으면 계정 탈퇴가 실제로 보낸 토큰이다(401 복구로 다시 보냈으면
+   * 받은 토큰이다). 스토어 쓰기와 화면 옮기기는 세션을 본다.
    *
    * 다시 시도는 첫 단계부터다. 비밀번호도 다시 받는다 — 탈퇴한 계정의 계정 탈퇴는 비밀번호가 틀려도 204 지만 빈 값은
    * `C001` 이다(§2.2).
    */
   const withdraw = async () => {
+    // 요청을 기다리는 사이에 세션이 바뀔 수 있다 — 로그아웃하고 다른 계정으로 로그인하면 이 화면은 내려가도 이 함수는 끝까지 돈다.
+    const session = watchSession();
     setWithdrawing(true);
     setWithdrawError(null);
     try {
       // 첫 단계가 어떤 이유로든 실패하면 둘째를 부르지 않는다.
-      await withdrawAccount(withdrawPassword);
+      const { config } = await withdrawAccount(withdrawPassword);
       setWithdrawPassword('');
-      setWithdrawal('account');
-      await withdrawProfile().catch((e: unknown) => {
+      // 둘째 단계를 보낼 토큰이다. 이 함수 밖에 두지 않는다 — 스토어·화면·기록에 남기지 않는다. 세션이 그대로면 지금 토큰이다 — 기다리는
+      // 사이에 재발급을 받았으면 첫 단계가 보낸 토큰은 만료됐을 수 있다. 세션이 끝났거나 바뀌었으면 첫 단계가 실제로 보낸 토큰이다 — 401
+      // 복구로 다시 보냈으면 받은 토큰이고, 지금 토큰으로 보내면 다른 세션의 프로필이 지워진다. 그 토큰이 만료됐으면 재발급하지 않고
+      // 실패한다(`inSession`).
+      const token = session.same() ? useAuthStore.getState().accessToken : sentAccessToken(config);
+      // 어디까지 끝났는지는 다른 세션의 화면에 보일 일이 아니다. 세션이 끝나기만 했으면 남긴다 — 로그인 화면이 다시 시도할 수 없다고 보이고,
+      // 둘째 단계가 끝나면 탈퇴했다고 보인다.
+      if (!session.replaced()) setWithdrawal('account');
+      // 보낼 토큰을 모르면 둘째 단계를 보내지 않고 실패로 끝낸다 — 다른 토큰으로 짐작해 보내지 않는다.
+      if (token === null) throw new Error('둘째 단계를 보낼 토큰을 알 수 없다');
+      await withdrawProfile(token, session.started).catch((e: unknown) => {
         // 프로필이 아예 없는 계정이다 — 지울 것이 없으므로 끝난 것이다(§3.1, 그 경우는 멱등의 대상이 아니라 404 다).
         if (errorOf(e)?.code !== 'M001') throw e;
       });
     } catch (e) {
-      // 둘째 단계의 실패면 계정 탈퇴는 끝났다(`withdrawal`). 토큰이 남아 있으면 이 칸에서 다시 시도한다. 토큰이 비었으면
-      // (A003 뒤 재발급 실패) 이 화면은 로그인으로 가고 로그인 화면이 다시 시도할 수 없다는 것을 보인다. 쥐는 것은 요청
-      // 본문을 비운 사본이다 — 계정 탈퇴의 본문에는 비밀번호가 있다.
+      // 둘째 단계의 실패면 계정 탈퇴는 끝났다(`withdrawal`). 토큰이 남아 있으면 이 칸에서 다시 시도한다. 토큰이 비었으면 이 화면은
+      // 로그인으로 가고 로그인 화면이 다시 시도할 수 없다는 것을 보인다. 쥐는 것은 요청 본문을 비운 사본이다 — 계정 탈퇴의 본문에는
+      // 비밀번호가 있다.
       setWithdrawError(withoutRequestBody(e));
       return;
     } finally {
       setWithdrawing(false);
     }
+    if (session.replaced()) return;
     // 로그아웃 요청은 보내지 않는다 — 로그아웃은 저장된 Refresh Token 을 지우는 것인데(requirements/member.md MR-06)
     // 계정 탈퇴가 같은 트랜잭션에서 지웠고, 지울 것이 없어도 204 라(§2.1) 서버에서 바뀌는 것이 없다.
     setWithdrawal('done');
-    clear();
-    navigate('/login', { replace: true });
+    // `flushSync` 로 옮긴다 — 로그인 화면을 동기로 그려, 기다리는 사이에 옮겨 간 공개 화면도 캐시를 비우는 커밋 뒤에 남기지 않는다
+    // (components/Layout.tsx 의 로그아웃과 같다). 지우기는 옮긴 뒤에 하고, 그 사이 다른 세션이 시작됐으면 지우지 않는다. 세션이 끝나기만
+    // 했으면 이미 비었다.
+    await navigate('/login', { replace: true, flushSync: true });
+    if (session.same()) clear();
   };
 
   return (
@@ -129,8 +148,8 @@ export function MyPage() {
 
         <Panel title="프로필">
           {profile.isError ? (
-            // 이 조회의 M001 은 "프로필이 아직 없음" 이다 — 프로필 등록으로 안내한다(MY_PROFILE).
-            <ErrorBox error={profile.error} meanings={MY_PROFILE} />
+            // 이 조회의 M001 은 "프로필이 아직 없음" 이거나 탈퇴한 프로필이다 — 등록할 수 있을 때만 등록으로 안내한다.
+            <ErrorBox error={profile.error} meanings={profileMeanings} />
           ) : (
             <>
               <dl className="space-y-1.5 text-sm">
