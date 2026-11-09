@@ -61,8 +61,10 @@ export const ERROR_SENTENCES: Record<string, Sentence> = {
 export type Meanings = Record<string, Sentence>;
 
 /**
- * `GET /api/v1/members/me` — 404 `M001` 은 오류가 아니라 "가입 3단계가 아직" 이고 클라이언트는 프로필 등록으로
- * 보낸다(api-contract.md §3). **남의 프로필 조회(`GET /members/{accountId}`)의 `M001` 은 이 뜻이 아니다** — 그
+ * `GET /api/v1/members/me` — 404 `M001` 은 프로필이 없거나 탈퇴한 것이다. 없으면 오류가 아니라 "가입 3단계가 아직" 이고
+ * 클라이언트는 프로필 등록으로 안내한다. 이 응답으로는 둘을 가를 수 없다(api-contract.md §3) — 가르는 것은 공개 조회
+ * (`GET /members/{accountId}`)의 `deleted` 다(§3.1). `features/member/useNoProfileMeanings.ts` 가 이 뜻과 아래 `WITHDRAWN_PROFILE` 중에서
+ * 고른다. **남의 프로필 조회(`GET /members/{accountId}`)의 `M001` 은 이 뜻이 아니다** — 그
  * 회원의 프로필이 없다는 것이다(§3.1).
  */
 export const MY_PROFILE: Meanings = {
@@ -128,7 +130,7 @@ export const ERROR_CODES: Record<string, CodeInfo> = {
   AU003: { owner: 'auth', status: 401, note: '이메일 또는 비밀번호 불일치 (누락·빈 값도 여기다)' },
   AU004: { owner: 'auth', status: 400, note: '현재 비밀번호 불일치' },
 
-  M001: { owner: 'member', status: 404, note: '프로필 없음 — 오류가 아니라 가입 3단계 미완료' },
+  M001: { owner: 'member', status: 404, note: '프로필 없음 — 내 프로필이면 미등록(가입 3단계 미완료) 또는 탈퇴' },
   M003: { owner: 'member', status: 409, note: '이미 사용 중인 닉네임' },
   M006: { owner: 'member', status: 409, note: '이미 프로필이 등록된 계정' },
   M007: { owner: 'member', status: 409, note: '탈퇴한 프로필' },
@@ -138,7 +140,7 @@ export const ERROR_CODES: Record<string, CodeInfo> = {
   CM001: { owner: 'board', status: 404, note: '댓글 없음' },
   CM002: { owner: 'board', status: 403, note: '댓글 권한 없음' },
   S001: { owner: 'board', status: 503, note: 'member 연동 실패 — 경보 대상. 조회·수정·삭제는 영향 없다' },
-  S002: { owner: 'board', status: 403, note: '프로필 등록이 필요하다 (가입 3단계 미완료)' },
+  S002: { owner: 'board', status: 403, note: '활성 프로필 없음 — 미등록(가입 3단계 미완료) 또는 탈퇴' },
 };
 
 export function describeCode(code: string | null | undefined): CodeInfo | null {

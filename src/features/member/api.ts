@@ -23,7 +23,7 @@ export function createProfile(nickname: string) {
   return unwrap(http.post<ApiResponse<MyProfile>>('/api/v1/members', { nickname }));
 }
 
-/** 프로필이 없으면 404 `M001` 이다. 오류가 아니라 "가입 3단계가 아직" 이라는 뜻이다(§3). */
+/** 프로필이 없거나 탈퇴했으면 404 `M001` 이다. 없으면 "가입 3단계가 아직" 이고, 이 응답으로는 둘을 가를 수 없다(§3) — 가르는 것은 `getProfile` 의 `deleted` 다. */
 export function getMyProfile() {
   return unwrap(http.get<ApiResponse<MyProfile>>('/api/v1/members/me'));
 }
@@ -34,7 +34,7 @@ export function updateNickname(nickname: string) {
 }
 
 /**
- * 탈퇴 2단계. 멱등이다 — 이미 탈퇴한 프로필도 204 다(§3.1). 1단계에서 쓰던 Access Token 으로 부른다(§9.1.1) — 토큰과 세션은 부르는 쪽이
+ * 탈퇴 2단계. 멱등이다 — 이미 탈퇴한 프로필도 204 다(§3.1). 1단계와 같은 로그인의 Access Token 으로 부른다(§9.1.1, requirements/member.md §8) — 토큰과 세션은 부르는 쪽이
  * 넘긴다(pages/MyPage.tsx). 1단계를 시작한 세션이 그대로면 지금 토큰이고, 끝났거나 바뀌었으면 1단계가 실제로 보낸 토큰이다.
  */
 export function withdrawProfile(accessToken: string, generation: number) {
