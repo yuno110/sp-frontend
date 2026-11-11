@@ -1184,6 +1184,8 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
 
       expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken(tag), refreshToken: `RT-${tag}` });
       expect(storedTokens()).toEqual([`RT-${tag}`]);
+      // 로그아웃의 본문은 누른 세션의 Refresh Token 이다 — 새 세션의 것이면 서버가 새 세션의 행을 지운다(sp-docs/requirements/member.md §6.4).
+      expect(sent(LOGOUT).map((r) => r.body)).toEqual([{ refreshToken: 'RT-1' }]);
       expect(pathname()).toBe('/posts');
       expect(within(banner()).getByRole('button', { name: /로그아웃/ })).toBeInTheDocument();
     });
@@ -1738,6 +1740,7 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
       await atPath('/posts');
       expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
       expect(storedTokens()).toEqual(['RT-B']);
+      expect(sent(LOGOUT).map((r) => r.body)).toEqual([{ refreshToken: 'RT-1' }]);
     });
   });
 

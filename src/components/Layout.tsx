@@ -93,8 +93,14 @@ export function Layout() {
     // 응답을 기다리는 사이에 세션이 바뀌면 이 응답은 지금 세션의 일이 아니다 — 로그인 화면에는 이 버튼과 로그인 폼이 함께 있다. 끝내면 새
     // 세션이 끝나고, 실패를 보이면 새 세션을 두고 로그아웃하지 못했다고 하게 된다.
     const session = watchSession();
+    // 본문에는 이 세션의 Refresh Token 을 싣는다 — 세션을 찍은 그 자리에서 읽는다. 서버는 그 값이 그 계정의 저장값이나 직전 토큰일 때만
+    // 지운다(sp-docs/requirements/member.md §6.4). 401 복구로 다시 보내면 본문은 그대로이고 그 값은 재발급이 회전시킨 직전 토큰이라 지운다.
+    const { refreshToken } = useAuthStore.getState();
     try {
-      await logout();
+      // 로그인한 세션에는 Refresh Token 이 있다(`setTokens`). 없으면 보내지 않고 실패로 보인다 — 빈 값을 보내면 서버가 400 으로 거절하고,
+      // 토큰만 지우면 서버에 알리지 않고 끝낸 것이 된다.
+      if (refreshToken === null) throw new Error('이 세션의 Refresh Token 이 없다');
+      await logout(refreshToken);
     } catch (e) {
       // 토큰을 지우지 않는다 — 서버의 Refresh Token 이 남아 있는데 탭만 비우면 로그아웃한 것처럼 보이고(불변식 9) 다시 알릴 토큰도
       // 없다. 로그아웃은 멱등이라 다시 눌러도 된다(sp-docs/api-contract.md §2.1). 그 실패로 세션이 끝났으면(재발급 거부) 로그아웃할

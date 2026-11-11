@@ -222,6 +222,61 @@ describe('영속 저장소', () => {
 });
 
 /**
+ * 로그아웃의 본문은 **로그아웃을 시작한 세션의** Refresh Token 이다(sp-docs/api-contract.md §9.5). 서버는 그 값이 그 계정의 저장값이나
+ * 직전 토큰일 때만 행을 지우고 아니면 204 로 아무것도 하지 않는다(sp-docs/requirements/member.md §6.4) — 본문이 없거나 다른 값이면
+ * 화면은 로그아웃한 것처럼 보이는데 서버의 Refresh Token 이 남는다.
+ */
+describe('로그아웃 본문', () => {
+  const LOGOUT = 'POST /api/v1/auth/logout';
+  const logouts = () => requests.filter((r) => r.key === LOGOUT);
+  const base = {
+    'GET /api/v1/posts': () => ok(EMPTY_PAGE),
+    'GET /api/v1/members/me': () => ok(PROFILE),
+  };
+
+  it('이 세션의 Refresh Token 을 싣는다', async () => {
+    routes = { ...base, [LOGOUT]: () => null };
+    await renderApp('/posts', { loggedIn: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: '로그아웃' }));
+    await waitFor(() => expect(pathname()).toBe('/login'));
+
+    expect(logouts().map((r) => r.body)).toEqual([{ refreshToken: 'RT-1' }]);
+  });
+
+  it('재발급으로 회전한 뒤면 — 받은 Refresh Token 을 싣는다. 같은 세션이다', async () => {
+    routes = { ...base, [LOGOUT]: () => null };
+    const { useAuthStore } = await renderApp('/posts', { loggedIn: true });
+    act(() => useAuthStore.getState().setReissuedTokens(tokens('2')));
+
+    fireEvent.click(await screen.findByRole('button', { name: '로그아웃' }));
+    await waitFor(() => expect(pathname()).toBe('/login'));
+
+    expect(logouts().map((r) => r.body)).toEqual([{ refreshToken: 'RT-2' }]);
+  });
+
+  it('401 A003 으로 재발급한 뒤 다시 보내도 — 본문은 처음 실은 값이다. 서버는 그것을 직전 토큰으로 지운다', async () => {
+    routes = {
+      ...base,
+      [LOGOUT]: (config) =>
+        config.headers.Authorization === `Bearer ${accessToken('1')}` ? fail(config, 401, 'A003') : null,
+      [REISSUE]: () => ok(tokens('2')),
+    };
+    await renderApp('/posts', { loggedIn: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: '로그아웃' }));
+    await waitFor(() => expect(pathname()).toBe('/login'));
+
+    expect(logouts().map((r) => [r.auth, r.body])).toEqual([
+      [`Bearer ${accessToken('1')}`, { refreshToken: 'RT-1' }],
+      [`Bearer ${accessToken('2')}`, { refreshToken: 'RT-1' }],
+    ]);
+    expect(reissues().map((r) => r.body)).toEqual([{ refreshToken: 'RT-1' }]);
+    expect(stored()).toEqual([]);
+  });
+});
+
+/**
  * 로그아웃 실패. **토큰을 지우지 않는다** — 서버의 Refresh Token 이 그대로인데 이 탭만 비우면 로그아웃된 것처럼 보이고(불변식 9)
  * 다시 알릴 토큰도 사라진다. 로그아웃은 멱등이라(sp-docs/api-contract.md §2.1) 다시 눌러도 된다.
  */

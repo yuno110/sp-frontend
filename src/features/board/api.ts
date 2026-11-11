@@ -41,7 +41,7 @@ export function getPost(id: PathId) {
   return unwrap(http.get<ApiResponse<PostDetail>>(`/api/v1/posts/${id}`));
 }
 
-/** 작성에만 member 내부 API 호출이 끼어든다 — 프로필이 없으면 403 `S002`, 연동 실패는 503 `S001`. */
+/** 작성에만 member 내부 API 호출이 끼어든다 — 프로필이 없거나 탈퇴했으면 403 `S002`, 연동 실패는 503 `S001`. */
 export function createPost(title: string, content: string) {
   return unwrap(http.post<ApiResponse<PostDetail>>('/api/v1/posts', { title, content }));
 }

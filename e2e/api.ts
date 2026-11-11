@@ -41,7 +41,7 @@ const ERRORS = {
   M001: { status: 404, message: '프로필을 찾을 수 없습니다.' },
   M007: { status: 409, message: '탈퇴한 프로필입니다.' },
   P001: { status: 404, message: '게시글을 찾을 수 없습니다.' },
-  S002: { status: 403, message: '프로필 등록이 필요합니다.' },
+  S002: { status: 403, message: '활성 프로필이 필요합니다.' },
   AU003: { status: 401, message: '이메일 또는 비밀번호가 일치하지 않습니다.' },
 } as const;
 

@@ -51,9 +51,13 @@ export async function reissue(refreshToken: string) {
   );
 }
 
-/** 멱등이다 — 저장된 Refresh Token 이 없어도 204 다(§2.1). */
-export function logout() {
-  return http.post('/api/v1/auth/logout');
+/**
+ * 본문의 Refresh Token 이 그 계정의 저장값이나 직전 토큰과 같을 때만 서버가 그 행을 지우고, 아니면 아무것도 하지 않고 204 다(§9.5,
+ * requirements/member.md §6.4). 그래서 **로그아웃을 시작한 세션의** Refresh Token 을 부르는 쪽이 넘긴다 — 지금 스토어의 값을 여기서 읽지
+ * 않는다(components/Layout.tsx).
+ */
+export function logout(refreshToken: string) {
+  return http.post('/api/v1/auth/logout', { refreshToken });
 }
 
 /** 이메일과 가입일 둘만 온다. `accountId` 는 없다(§2.2). */
