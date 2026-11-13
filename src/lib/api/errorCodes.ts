@@ -26,6 +26,8 @@ export const ERROR_SENTENCES: Record<string, Sentence> = {
   C005: { text: '서버에서 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' },
   C006: { text: '지원하지 않는 형식의 요청입니다.' },
   C007: { text: '요청한 형식으로 응답할 수 없습니다.' },
+  C008: { text: '보낸 내용이 허용된 크기를 넘었습니다.' },
+  C009: { text: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.' },
   A001: { text: '로그인이 필요합니다.', recovery: 'login' },
   A002: { text: '로그인 정보가 올바르지 않습니다. 다시 로그인해 주세요.', recovery: 'login' },
   A003: { text: '로그인이 만료되었습니다. 다시 로그인해 주세요.', recovery: 'login' },
@@ -43,8 +45,13 @@ export const ERROR_SENTENCES: Record<string, Sentence> = {
 
   P001: { text: '게시글을 찾을 수 없습니다. 삭제되었을 수 있습니다.' },
   P002: { text: '이 게시글을 수정하거나 삭제할 권한이 없습니다.' },
+  P003: { text: '공지를 작성하거나 변경할 권한이 없습니다.' },
   CM001: { text: '댓글을 찾을 수 없습니다. 삭제되었을 수 있습니다.' },
   CM002: { text: '이 댓글을 수정하거나 삭제할 권한이 없습니다.' },
+  CM003: { text: '답글에는 답글을 달 수 없습니다.' },
+  AT001: { text: '첨부 파일을 찾을 수 없습니다. 삭제되었을 수 있습니다.' },
+  AT002: { text: '허용하지 않는 파일 형식입니다.' },
+  AT003: { text: '한 게시글에 첨부할 수 있는 파일 수를 넘었습니다.' },
   S001: { text: '일시적인 문제로 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.' },
   S002: { text: '글과 댓글을 쓰려면 프로필을 먼저 등록해야 합니다.', recovery: 'profile' },
 
@@ -52,6 +59,11 @@ export const ERROR_SENTENCES: Record<string, Sentence> = {
   AU002: { text: '이미 사용 중인 이메일입니다.' },
   AU003: { text: '이메일 또는 비밀번호가 일치하지 않습니다.' },
   AU004: { text: '현재 비밀번호가 일치하지 않습니다.' },
+  // 잠금은 비밀번호가 맞든 틀리든, 계정이 있든 없든 같은 응답이다(§8.4) — 문장도 그것을 말하지 않는다. 잠금 시간도 적지
+  // 않는다 — 값이 바뀌면 문장이 거짓이 된다(같은 절).
+  AU005: { text: '로그인 시도가 많아 지금은 로그인할 수 없습니다. 잠시 후 다시 시도해 주세요.' },
+  AU006: { text: '이메일 인증을 마쳐야 로그인할 수 있습니다.' },
+  AU007: { text: '링크가 유효하지 않거나 만료되었습니다.' },
 };
 
 /**
@@ -120,6 +132,8 @@ export const ERROR_CODES: Record<string, CodeInfo> = {
   C005: { owner: '공통', status: 500, note: '서버 내부 오류' },
   C006: { owner: '공통', status: 415, note: '지원하지 않는 미디어 타입' },
   C007: { owner: '공통', status: 406, note: '응답할 수 있는 형식 없음' },
+  C008: { owner: '공통', status: 413, note: '요청 크기 한도 초과 — 첨부의 크기 위반도 여기다(AT 가 아니다)' },
+  C009: { owner: '공통', status: 429, note: '요청 수 제한 초과 — Retry-After(초)를 싣는다. 제한기를 가진 auth·member 만 낸다' },
   A001: { owner: '공통', status: 401, note: '자격증명 미제시 (헤더 없음·다른 스킴·b64token 문법 위반)' },
   A002: { owner: '공통', status: 401, note: '유효하지 않은 토큰 (사유를 가르지 않는다)' },
   A003: { owner: '공통', status: 401, note: '만료된 토큰 — 재발급 대상' },
@@ -129,6 +143,9 @@ export const ERROR_CODES: Record<string, CodeInfo> = {
   AU002: { owner: 'auth', status: 409, note: '이미 사용 중인 이메일' },
   AU003: { owner: 'auth', status: 401, note: '이메일 또는 비밀번호 불일치 (누락·빈 값도 여기다)' },
   AU004: { owner: 'auth', status: 400, note: '현재 비밀번호 불일치' },
+  AU005: { owner: 'auth', status: 401, note: '로그인 잠금 — 비밀번호가 맞든 틀리든, 계정이 있든 없든 같다' },
+  AU006: { owner: 'auth', status: 403, note: '이메일 미인증 — 비밀번호는 맞았다' },
+  AU007: { owner: 'auth', status: 400, note: '메일 링크의 토큰 오류 전부 (유효하지 않음·만료) — A002 와 섞지 않는다' },
 
   M001: { owner: 'member', status: 404, note: '프로필 없음 — 내 프로필이면 미등록(가입 3단계 미완료) 또는 탈퇴' },
   M003: { owner: 'member', status: 409, note: '이미 사용 중인 닉네임' },
@@ -137,8 +154,13 @@ export const ERROR_CODES: Record<string, CodeInfo> = {
 
   P001: { owner: 'board', status: 404, note: '게시글 없음 (삭제된 글도 여기다)' },
   P002: { owner: 'board', status: 403, note: '게시글 권한 없음' },
+  P003: { owner: 'board', status: 403, note: '공지 권한 없음 — 남의 글의 권한은 P002 다' },
   CM001: { owner: 'board', status: 404, note: '댓글 없음' },
   CM002: { owner: 'board', status: 403, note: '댓글 권한 없음' },
+  CM003: { owner: 'board', status: 400, note: '답글에 답글 — 두 단계 답글' },
+  AT001: { owner: 'board', status: 404, note: '첨부 없음' },
+  AT002: { owner: 'board', status: 400, note: '허용하지 않는 파일 형식' },
+  AT003: { owner: 'board', status: 409, note: '게시글당 첨부 수 초과 — 상태 충돌이라 409' },
   S001: { owner: 'board', status: 503, note: 'member 연동 실패 — 경보 대상. 조회·수정·삭제는 영향 없다' },
   S002: { owner: 'board', status: 403, note: '활성 프로필 없음 — 미등록(가입 3단계 미완료) 또는 탈퇴' },
 };

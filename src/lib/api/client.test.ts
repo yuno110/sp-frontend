@@ -111,6 +111,18 @@ describe('describeError', () => {
     expect(describeError(e)).toMatchObject({ text: ERROR_SENTENCES.M001.text, recovery: null, code: 'M001' });
   });
 
+  // 2차 계약이 §8 에 더한 코드(sp-docs/plan/phase2-frontend-integration.md F-07). 사전의 문장이 서버 메시지와 다른 코드를
+  // 고른다 — 같은 코드(예: `AT002`)로는 어느 쪽을 골랐는지 갈리지 않는다.
+  it('2차 계약에 더해진 코드 — 사전의 문장을 고르고 코드를 남긴다', () => {
+    expect(describeError(apiError(409, 'AT003', '게시글당 첨부 파일 수를 넘었습니다.'))).toEqual({
+      text: ERROR_SENTENCES.AT003.text,
+      code: 'AT003',
+      recovery: null,
+      fieldErrors: [],
+      detail: null,
+    });
+  });
+
   it('사전에 없는 코드 — 서버 메시지와 코드를 그대로 쓴다', () => {
     expect(describeError(apiError(400, 'X999', '새로 생긴 오류입니다.'))).toMatchObject({
       text: '새로 생긴 오류입니다.',
