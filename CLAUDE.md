@@ -10,7 +10,7 @@
 
 - **배포 오리진이 없다.** 지금은 로컬뿐이고, 생기면 세 서비스의 `cors.allowed-origins` 에 더한다(`sp-docs/security.md` §1.1 — 그 값은 환경이 정한다)
 
-**이 목록을 지우는 것이 2차의 일이다.** 비우기 전에 "제품이니 다 되어 있다" 고 적지 않는다. 항목은 `sp-docs/plan/phase2.md` §7 의 `F-xx` 이고, **항목이 끝나면 여기서 그 줄을 지운다.** 배포 오리진은 항목이 없다 — 배포할 곳이 생겨야 정할 수 있고 `sp-docs/plan/phase2.md` §2(컨테이너화)가 받는다.
+**이 목록을 지우는 것이 2차의 일이다.** 비우기 전에 "제품이니 다 되어 있다" 고 적지 않는다. 항목은 `sp-docs/plan/phase2.md` §7 의 `F-xx`(`F-01`~`F-06`)이고, **항목이 끝나면 여기서 그 줄을 지운다.** `F-07` 부터는 2차 기능 확장의 항목이고 `sp-docs/plan/phase2-frontend-integration.md` 에 있다. 배포 오리진은 항목이 없다 — 배포할 곳이 생겨야 정할 수 있고 `sp-docs/plan/phase2.md` §2(컨테이너화)가 받는다.
 
 ## 행동 원칙
 
@@ -163,7 +163,7 @@
 
 ## 작업 규칙
 
-- 이 저장소의 작업 항목은 **`F-xx`** 다. 범위·의존·완료 기준은 `sp-docs/plan/phase2.md` §7, **상태 원본은 이 저장소의 `docs/checklist.md`** 하나뿐이다
+- 이 저장소의 작업 항목은 **`F-xx`** 다. 범위·의존·완료 기준은 `F-01`~`F-06` 이 `sp-docs/plan/phase2.md` §7, `F-07` 부터가 `sp-docs/plan/phase2-frontend-integration.md` 이고, **상태 원본은 이 저장소의 `docs/checklist.md`** 하나뿐이다
 - 순서: 구현 → 테스트 → `pnpm typecheck` → `pnpm test:run` → `pnpm build` → `pnpm test:e2e` → `pnpm test:e2e:live` → **`git add -A`** → 리뷰 → 커밋. 두 브라우저 테스트는 빌드부터 다시 해서 3000 번에 띄우고 끝나면 내린다 — 3000 번이 비어 있어야 한다. `pnpm test:e2e` 는 백엔드가 필요 없고, `pnpm test:e2e:live` 는 세 서비스를 `local` 로 먼저 띄워야 한다
 - **리뷰를 통과하기 전에 커밋·푸시하지 않는다.** 리뷰가 게이트다
 - **실패하는 테스트를 건너뛰거나 단언을 약화하지 않는다**
