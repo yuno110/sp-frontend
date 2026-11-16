@@ -12,6 +12,8 @@ export const ROUTES = [
   '/signup/profile',
   '/verify-email',
   '/verify-email/resend',
+  '/reset-password',
+  '/reset-password/request',
   '/posts/mine',
   '/posts/new',
   '/posts',

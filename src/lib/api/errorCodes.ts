@@ -4,7 +4,7 @@
  */
 
 /** 복구 동작. 화면이 그곳으로 가는 링크를 붙인다(components/ui.tsx). */
-export type Recovery = 'profile' | 'login' | 'signup' | 'resendVerification';
+export type Recovery = 'profile' | 'login' | 'signup' | 'resendVerification' | 'requestPasswordReset';
 
 export interface Sentence {
   text: string;
@@ -116,6 +116,18 @@ export const AFTER_WITHDRAWAL: Meanings = {
  */
 export const EMAIL_VERIFICATION: Meanings = {
   AU007: { text: '링크가 유효하지 않거나 만료되었습니다. 이미 인증했다면 로그인해 주세요.', recovery: 'login' },
+};
+
+/**
+ * `POST /api/v1/accounts/password-reset/confirm` — 400 `AU007` 은 링크가 없다·만료됐다·이미 쓰였다·목적이 다르다·그 계정이 탈퇴했다를
+ * 가르지 않는다(api-contract.md §2.4). 같은 토큰으로 다시 보내도 같은 답이므로 새 링크를 받는 비밀번호 찾기 화면으로 안내한다. 링크의 수명은
+ * 적지 않는다 — 값이 바뀌면 문장이 거짓이 된다. 재설정 화면(pages/ResetPasswordPage.tsx)이 넘긴다.
+ */
+export const PASSWORD_RESET: Meanings = {
+  AU007: {
+    text: '링크가 유효하지 않거나 만료되었습니다. 비밀번호 재설정 메일을 다시 받아 주세요.',
+    recovery: 'requestPasswordReset',
+  },
 };
 
 /** 응답이 아예 없는 실패 — 연결 거부·CORS 거부·타임아웃. 업무 오류와 다른 문장이다. */

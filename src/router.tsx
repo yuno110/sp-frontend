@@ -4,6 +4,7 @@ import { Layout, type RouteHandle } from '@/components/Layout';
 import { LoginPage } from '@/pages/LoginPage';
 import { SignupPage, SignupProfilePage } from '@/pages/SignupPage';
 import { ResendVerificationPage, VerifyEmailPage } from '@/pages/VerifyEmailPage';
+import { RequestPasswordResetPage, ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { PostListPage } from '@/pages/PostListPage';
 import { PostDetailPage } from '@/pages/PostDetailPage';
 import { PostFormPage } from '@/pages/PostFormPage';
@@ -63,6 +64,10 @@ export const router = createBrowserRouter([
       // (sp-docs/requirements/member.md §11.5). 둘 다 무인증 요청이라 공개 경로다.
       { path: 'verify-email', element: <VerifyEmailPage />, handle: PUBLIC_SCREEN },
       { path: 'verify-email/resend', element: <ResendVerificationPage />, handle: PUBLIC_SCREEN },
+      // 재설정 메일의 링크(`{FRONTEND_BASE_URL}/reset-password#token=…`, sp-docs/requirements/member.md §11.5)가 여는 화면과 그 메일을
+      // 요청하는 화면이다. 로그인하지 못하는 사용자가 쓰는 무인증 요청이라 공개 경로다.
+      { path: 'reset-password', element: <ResetPasswordPage />, handle: PUBLIC_SCREEN },
+      { path: 'reset-password/request', element: <RequestPasswordResetPage />, handle: PUBLIC_SCREEN },
       {
         path: 'posts/mine',
         element: (

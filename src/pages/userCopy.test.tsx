@@ -290,6 +290,16 @@ async function pressVerify() {
   fireEvent.click(await within(main()).findByRole('button', { name: '이메일 인증하기' }));
 }
 
+/** 재설정 메일의 링크가 여는 주소 — 토큰은 fragment 에 있다(sp-docs/requirements/member.md §11.5). */
+const RESET_LINK = '/reset-password#token=Zm9v-YmFy_link';
+const REQUEST_RESET = 'POST /api/v1/accounts/password-reset';
+const CONFIRM_RESET = 'POST /api/v1/accounts/password-reset/confirm';
+/** 재설정 화면에서 새 비밀번호를 넣고 낸다 — 링크를 연 것만으로는 보내지 않는다. */
+async function submitNewPassword() {
+  type(await within(main()).findByLabelText(/^새 비밀번호/), 'NewPassw0rd!');
+  fireEvent.submit(main().querySelector('form')!);
+}
+
 /* ───────── 화면마다 보이는 문구 ───────── */
 
 interface CopyState {
@@ -564,7 +574,7 @@ const COPY_STATES: CopyState[] = [
     extra: { 'GET /api/v1/members/99': () => fail(404, 'M001') },
     ready: errorShown,
   },
-  { name: '로그인', path: '/login', ready: () => until(['계정이 없으면']) },
+  { name: '로그인', path: '/login', ready: () => until(['계정이 없으면', '비밀번호를 잊었다면']) },
   {
     name: '로그인 — 실패',
     path: '/login',
@@ -679,6 +689,59 @@ const COPY_STATES: CopyState[] = [
       fireEvent.submit(main().querySelector('form')!);
       await until(['요청을 받았습니다.'], main);
     },
+  },
+  {
+    name: '비밀번호 찾기 — 입력 전',
+    path: '/reset-password/request',
+    ready: () => until(['재설정 메일 보내기'], main),
+  },
+  {
+    name: '비밀번호 찾기 — 요청을 받음',
+    path: '/reset-password/request',
+    extra: { [REQUEST_RESET]: () => ACCEPTED },
+    ready: async () => {
+      type(screen.getByLabelText(/^이메일/), 'new@example.com');
+      fireEvent.submit(main().querySelector('form')!);
+      await until(['요청을 받았습니다.'], main);
+    },
+  },
+  {
+    name: '비밀번호 재설정 — 링크를 연 화면',
+    path: RESET_LINK,
+    ready: () => until(['비밀번호 바꾸기', '비밀번호 찾기'], main),
+  },
+  {
+    name: '비밀번호 재설정 — 마침',
+    path: RESET_LINK,
+    extra: { [CONFIRM_RESET]: () => NO_CONTENT },
+    ready: async () => {
+      await submitNewPassword();
+      await until(['비밀번호를 바꿨습니다.', '로그인하기'], main);
+    },
+  },
+  {
+    name: '비밀번호 재설정 — 쓸 수 없는 링크(AU007)',
+    path: RESET_LINK,
+    extra: { [CONFIRM_RESET]: () => fail(400, 'AU007') },
+    ready: async () => {
+      await submitNewPassword();
+      await errorShown();
+      await until(['비밀번호 찾기'], main);
+    },
+  },
+  {
+    name: '비밀번호 재설정 — 확인이 응답 없음',
+    path: RESET_LINK,
+    extra: { [CONFIRM_RESET]: () => 'no-response' },
+    ready: async () => {
+      await submitNewPassword();
+      await errorShown();
+    },
+  },
+  {
+    name: '비밀번호 재설정 — 링크에 토큰이 없음',
+    path: '/reset-password',
+    ready: () => until(['재설정 링크를 찾지 못했습니다.', '비밀번호 찾기'], main),
   },
   {
     name: '목록 — 응답 없음',
@@ -1159,6 +1222,8 @@ describe('공개 화면에서 세션이 끝날 때', () => {
     ['가입', '/signup', ['계정 만들기']],
     ['이메일 인증', VERIFY_LINK, ['이메일 인증하기']],
     ['인증 메일 다시 받기', '/verify-email/resend', ['인증 메일 보내기']],
+    ['비밀번호 재설정', RESET_LINK, ['비밀번호 바꾸기']],
+    ['비밀번호 찾기', '/reset-password/request', ['재설정 메일 보내기']],
   ])('%s — 새로고침 복원이 거부되면 화면을 그대로 두고 그 자리에서 이유를 보인다', async (_, path, drawn) => {
     await loggedInOnPreviousPage();
     await renderApp(path, { strict: true, extra: { 'POST /api/v1/auth/reissue': () => fail(401, 'A002') } });
@@ -1388,6 +1453,30 @@ const FIELD_CASES: FieldCase[] = [
       fireEvent.submit(main().querySelector('form')!);
       await errorShown();
       return [[screen.getByLabelText(/^이메일/), '올바른 이메일 형식이 아닙니다.']];
+    },
+  },
+  {
+    name: '비밀번호 찾기',
+    path: '/reset-password/request',
+    extra: { [REQUEST_RESET]: C001([{ field: 'email', message: '올바른 이메일 형식이 아닙니다.' }]) },
+    act: async () => {
+      fireEvent.submit(main().querySelector('form')!);
+      await errorShown();
+      return [[screen.getByLabelText(/^이메일/), '올바른 이메일 형식이 아닙니다.']];
+    },
+  },
+  {
+    name: '비밀번호 재설정',
+    path: RESET_LINK,
+    extra: {
+      [CONFIRM_RESET]: C001([
+        { field: 'newPassword', message: '비밀번호는 8~20자의 영문, 숫자, 특수문자 조합이어야 합니다.' },
+      ]),
+    },
+    act: async () => {
+      fireEvent.submit(main().querySelector('form')!);
+      await errorShown();
+      return [[screen.getByLabelText(/^새 비밀번호/), '비밀번호는 8~20자의 영문, 숫자, 특수문자 조합이어야 합니다.']];
     },
   },
   {

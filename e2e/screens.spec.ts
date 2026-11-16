@@ -4,6 +4,7 @@ import {
   ADMIN,
   COMMENTS,
   CONFIRM_EMAIL,
+  CONFIRM_PASSWORD_RESET,
   EMAIL,
   LONG_WORD,
   MY_PROFILE,
@@ -12,7 +13,9 @@ import {
   NO_CONTENT,
   OTHER_POST,
   POST,
+  REQUEST_PASSWORD_RESET,
   RESEND_VERIFICATION,
+  RESET_LINK,
   TITLE,
   VERIFY_LINK,
   WITHDRAWN_ID,
@@ -69,6 +72,15 @@ const SIGNUP_FIELD_ERRORS = [
 
 /** 인증 화면의 확인 버튼 — 링크를 연 것만으로는 확인하지 않는다. */
 const pressVerify = (page: Page) => main(page).getByRole('button', { name: '이메일 인증하기' }).click();
+
+/** 재설정 확인의 필드 오류 — 문장은 가입의 비밀번호와 같은 규칙의 것이다(sp-docs/requirements/member.md §2). */
+const NEW_PASSWORD_ERROR = { ...SIGNUP_FIELD_ERRORS[1], field: 'newPassword' };
+
+/** 재설정 화면에서 새 비밀번호를 넣고 낸다 — 링크를 연 것만으로는 보내지 않는다. */
+const submitNewPassword = async (page: Page) => {
+  await main(page).getByLabel(/^새 비밀번호/).fill('NewPassw0rd!');
+  await main(page).getByRole('button', { name: '비밀번호 바꾸기' }).click();
+};
 
 const withdraw = async (page: Page) => {
   const section = panel(page, '탈퇴');
@@ -208,6 +220,82 @@ const SCREENS: Screen[] = [
     path: '/verify-email/resend',
     api: { [RESEND_VERIFICATION]: fail('C001', [SIGNUP_FIELD_ERRORS[0]]) },
     act: (p) => main(p).getByRole('button', { name: '인증 메일 보내기' }).click(),
+    ready: (p) => shown(p, SIGNUP_FIELD_ERRORS[0].message),
+  },
+
+  {
+    route: '/reset-password',
+    state: '링크를 연 화면',
+    path: RESET_LINK,
+    lands: '/reset-password',
+    ready: (p) => expect(main(p).getByRole('button', { name: '비밀번호 바꾸기' })).toBeVisible(),
+  },
+  {
+    route: '/reset-password',
+    state: '새 비밀번호의 필드 오류',
+    path: RESET_LINK,
+    lands: '/reset-password',
+    api: { [CONFIRM_PASSWORD_RESET]: fail('C001', [NEW_PASSWORD_ERROR]) },
+    act: submitNewPassword,
+    ready: async (p) => {
+      await shown(p, NEW_PASSWORD_ERROR.message);
+      await expect(main(p).getByRole('button', { name: '비밀번호 바꾸기' })).toBeVisible();
+    },
+  },
+  {
+    route: '/reset-password',
+    state: '재설정을 마침',
+    path: RESET_LINK,
+    lands: '/reset-password',
+    api: { [CONFIRM_PASSWORD_RESET]: NO_CONTENT },
+    act: submitNewPassword,
+    ready: async (p) => {
+      await shown(p, '비밀번호를 바꿨습니다.');
+      await expect(main(p).getByRole('link', { name: '로그인하기' })).toBeVisible();
+    },
+  },
+  {
+    route: '/reset-password',
+    state: '쓸 수 없는 링크',
+    path: RESET_LINK,
+    lands: '/reset-password',
+    api: { [CONFIRM_PASSWORD_RESET]: fail('AU007') },
+    act: submitNewPassword,
+    ready: async (p) => {
+      await codeShown(p, 'AU007');
+      await expect(main(p).getByRole('link', { name: '비밀번호 찾기' })).toBeVisible();
+    },
+  },
+  {
+    route: '/reset-password',
+    state: '링크에 토큰이 없음',
+    path: '/reset-password',
+    ready: (p) => shown(p, '재설정 링크를 찾지 못했습니다. 메일의 링크를 다시 열어 주세요.'),
+  },
+
+  {
+    route: '/reset-password/request',
+    state: '입력 전',
+    path: '/reset-password/request',
+    ready: (p) => expect(main(p).getByRole('heading', { name: '비밀번호 찾기' })).toBeVisible(),
+  },
+  {
+    route: '/reset-password/request',
+    state: '요청을 받음',
+    path: '/reset-password/request',
+    api: { [REQUEST_PASSWORD_RESET]: ok(null, 202) },
+    act: async (p) => {
+      await main(p).getByLabel(/^이메일/).fill(EMAIL);
+      await main(p).getByRole('button', { name: '재설정 메일 보내기' }).click();
+    },
+    ready: (p) => expect(main(p).getByText('요청을 받았습니다.', { exact: false })).toBeVisible(),
+  },
+  {
+    route: '/reset-password/request',
+    state: '필드 오류',
+    path: '/reset-password/request',
+    api: { [REQUEST_PASSWORD_RESET]: fail('C001', [SIGNUP_FIELD_ERRORS[0]]) },
+    act: (p) => main(p).getByRole('button', { name: '재설정 메일 보내기' }).click(),
     ready: (p) => shown(p, SIGNUP_FIELD_ERRORS[0].message),
   },
 

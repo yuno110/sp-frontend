@@ -85,6 +85,8 @@ describe('세션이 끝난 이유를 보이는 화면', () => {
       'signup',
       'verify-email',
       'verify-email/resend',
+      'reset-password',
+      'reset-password/request',
       'posts',
       'posts/:id',
       'members/:accountId',

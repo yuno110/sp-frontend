@@ -63,6 +63,30 @@ export async function confirmEmailVerification(token: string): Promise<void> {
 }
 
 /**
+ * 비밀번호 재설정 요청(§2.4). 무인증이다. 본문은 `email` 이다 — 202 의 본문은 `data: null` 이라 `unwrap` 을 쓰지 않고, 202 는 계정의
+ * 상태를 말하지 않는다. 메일이 나가는지는 서버의 뒤 작업이 정한다(requirements/member.md §11.3).
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  await http.post<ApiResponse<null>>(
+    '/api/v1/accounts/password-reset',
+    { email },
+    { headers: { Authorization: null } },
+  );
+}
+
+/**
+ * 비밀번호 재설정 확인(§2.4). 무인증이다 — 링크를 연 탭의 세션과 상관없다. 성공은 204 이고 본문이 없다. **토큰을 주지 않는다** — 로그인은
+ * 새 비밀번호로 따로 한다. 본문에 새 비밀번호와 링크의 토큰이 있다 — 실패를 쥐는 쪽은 본문을 비운 사본을 쥔다(lib/api/withoutRequestBody.ts).
+ */
+export async function confirmPasswordReset(token: string, newPassword: string): Promise<void> {
+  await http.post(
+    '/api/v1/accounts/password-reset/confirm',
+    { token, newPassword },
+    { headers: { Authorization: null } },
+  );
+}
+
+/**
  * 응답은 로그인과 같은 `TokenResponse` 다(§2.1). **Refresh Token 도 회전 발급된다** —
  * 응답의 둘을 함께 저장해야 하고, 그러지 않으면 두 번째 갱신부터 막힌다.
  *

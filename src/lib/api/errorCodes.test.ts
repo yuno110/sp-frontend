@@ -8,6 +8,7 @@ import {
   ERROR_SENTENCES,
   MY_PROFILE,
   NO_RESPONSE,
+  PASSWORD_RESET,
   UNEXPECTED,
   WITHDRAWN_PROFILE,
 } from './errorCodes';
@@ -52,6 +53,7 @@ describe('코드 사전', () => {
         ...Object.keys(WITHDRAWN_PROFILE),
         ...Object.keys(AFTER_WITHDRAWAL),
         ...Object.keys(EMAIL_VERIFICATION),
+        ...Object.keys(PASSWORD_RESET),
       ]),
     );
   });
@@ -64,6 +66,7 @@ describe('사용자 문장', () => {
     ...Object.entries(WITHDRAWN_PROFILE).map(([code, s]) => [`${code} (탈퇴한 프로필)`, s.text] as const),
     ...Object.entries(AFTER_WITHDRAWAL).map(([code, s]) => [`${code} (계정 탈퇴 뒤)`, s.text] as const),
     ...Object.entries(EMAIL_VERIFICATION).map(([code, s]) => [`${code} (이메일 인증 확인)`, s.text] as const),
+    ...Object.entries(PASSWORD_RESET).map(([code, s]) => [`${code} (비밀번호 재설정 확인)`, s.text] as const),
     ['응답 없음', NO_RESPONSE] as const,
     ['오류 응답이 아닌 실패', UNEXPECTED] as const,
   ];
@@ -113,6 +116,10 @@ describe('복구 동작', () => {
     expect(EMAIL_VERIFICATION.AU007.text).toContain('이미 인증했다면 로그인해 주세요');
     expect(EMAIL_VERIFICATION.AU007.recovery).toBe('login');
     expect(ERROR_SENTENCES.AU007.recovery).toBeUndefined();
+  });
+
+  it('AU007 — 재설정 확인에서는 새 링크를 받는 비밀번호 찾기로', () => {
+    expect(PASSWORD_RESET.AU007.recovery).toBe('requestPasswordReset');
   });
 
   it('복구 동작은 위 코드에만 있다 — 나머지 코드가 엉뚱한 곳으로 보내지 않는다', () => {

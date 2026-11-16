@@ -145,7 +145,11 @@ export function LoginPage() {
           </Button>
         </form>
         <p className="mt-3 text-xs text-faint">
-          계정이 없으면 <Link to="/signup" className="text-accent-600 underline">가입</Link>.
+          계정이 없으면 <Link to="/signup" className="text-accent-600 underline">가입</Link>. 비밀번호를 잊었다면{' '}
+          <Link to="/reset-password/request" className="text-accent-600 underline">
+            비밀번호 찾기
+          </Link>
+          .
           {DEV_ONLY
             ? ' 가입은 계정 → 이메일 인증 → 로그인 → 프로필 순서다 (api-contract.md §9.1·§9.10). 로그인 뒤 내 프로필 조회가 M001 이면 프로필 등록으로 간다.'
             : null}

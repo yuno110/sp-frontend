@@ -99,6 +99,14 @@ export const RESEND_VERIFICATION = 'POST /api/v1/accounts/email-verification';
 export const LINK_TOKEN = 'Zm9v-YmFy_e2e-link';
 export const VERIFY_LINK = `/verify-email#token=${LINK_TOKEN}`;
 
+/**
+ * 비밀번호 재설정의 요청과 확인(§2.4). 요청은 계정이 있든 없든 202 이고, 확인은 204 이고 토큰을 주지 않는다. 재설정 메일의 링크도 토큰을
+ * fragment 에 싣는다(sp-docs/requirements/member.md §11.5).
+ */
+export const REQUEST_PASSWORD_RESET = 'POST /api/v1/accounts/password-reset';
+export const CONFIRM_PASSWORD_RESET = 'POST /api/v1/accounts/password-reset/confirm';
+export const RESET_LINK = `/reset-password#token=${LINK_TOKEN}`;
+
 // ── 화면에 그릴 값. 이메일·닉네임·제목의 길이는 입력 제약의 끝으로 둔다 — 360px 폭에서 넘치는지 보려는 것이다
 //    (sp-docs/requirements/member.md §2, requirements/board.md §4).
 

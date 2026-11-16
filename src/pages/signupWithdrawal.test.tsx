@@ -8,6 +8,7 @@ import {
   ERROR_SENTENCES,
   MY_PROFILE,
   NO_RESPONSE,
+  PASSWORD_RESET,
   WITHDRAWN_PROFILE,
 } from '@/lib/api/errorCodes';
 import { holds } from '@/test/holds';
@@ -15,7 +16,8 @@ import { holds } from '@/test/holds';
 /**
  * 가입과 탈퇴를 사용자 흐름으로 합친다 (sp-docs/plan/phase2.md §7.2 F-04). 서버 계약은 그대로다 — 가입은 계정 → (메일의 링크로
  * 인증) → 로그인 → 프로필, 탈퇴는 계정 → 프로필이다(api-contract.md §9.1·§9.1.1·§9.10). 계정을 만든 화면은 로그인하지 않는다 — 인증
- * 전의 로그인은 403 `AU006` 이다(F-08). **요청 순서는 어댑터가 받은 요청의 기록으로 단언한다.**
+ * 전의 로그인은 403 `AU006` 이다(F-08). **요청 순서는 어댑터가 받은 요청의 기록으로 단언한다.** 메일의 링크로 비밀번호를 다시 정하는
+ * 화면(§9.11, F-09)도 여기서 본다 — 비밀번호를 싣는 화면의 검사가 이 파일에 있다.
  *
  * 화면은 프로덕션 모드와 StrictMode 로 그린다 — 흉내는 src/pages/userCopy.test.tsx 와 같다. 요청은 axios 의 기본 어댑터로
  * 받는다. 재발급은 재시도 인터셉터가 없는 별도 인스턴스로 나가므로 인스턴스가 만들어지기 전에 기본값을 바꾼다.
@@ -576,6 +578,290 @@ describe('인증 전의 로그인', () => {
   });
 });
 
+/* ───────── 비밀번호 찾기 ───────── */
+
+const REQUEST_RESET = 'POST /api/v1/accounts/password-reset';
+
+/** 이메일을 넣어 낸다 — 비밀번호 찾기 화면의 한 동작이다. */
+function submitResetRequest(email: string) {
+  type(within(main()).getByLabelText(/^이메일/), email);
+  fireEvent.submit(main().querySelector('form')!);
+}
+
+describe('비밀번호 찾기', () => {
+  it('로그인 화면의 링크로 간다', async () => {
+    await renderApp('/login');
+    const link = within(main()).getByRole('link', { name: '비밀번호 찾기' });
+    expect(link).toHaveAttribute('href', '/reset-password/request');
+
+    fireEvent.click(link);
+
+    await atPath('/reset-password/request');
+    await screen.findByRole('heading', { name: '비밀번호 찾기' });
+    expect(writes()).toEqual([]);
+  });
+
+  it('202 — 계정이 있든 없든 같은 문장이다. 메일이 나갔다고 단정하지 않는다. 입력한 이메일만 싣는다', async () => {
+    // 서버는 계정의 유무와 상태에 상관없이 202 다(api-contract.md §2.4) — 두 이메일 모두 그 답이다.
+    await renderApp('/reset-password/request', { extra: { [REQUEST_RESET]: () => ACCEPTED } });
+
+    const shown: string[] = [];
+    for (const [i, email] of ['user@example.com', 'nobody@example.com'].entries()) {
+      submitResetRequest(email);
+      await waitFor(() => expect(sent(REQUEST_RESET)).toHaveLength(i + 1));
+      await until([REQUESTED], main);
+      shown.push(main().textContent ?? '');
+    }
+
+    expect(shown[1]).toBe(shown[0]);
+    expect(shown[0]).not.toContain('@');
+    // 문장 전체를 본다 — 조건부 문장 곁에 「보냈다」 는 단정이 붙어도 걸린다.
+    expect(within(main()).getByText(/^요청을 받았습니다\./).textContent).toBe(
+      '요청을 받았습니다. 이 이메일로 가입한 계정이 있다면 비밀번호 재설정 메일이 갑니다. 메일함을 확인해 주세요.',
+    );
+    expect(sent(REQUEST_RESET).map((r) => r.body)).toEqual([{ email: 'user@example.com' }, { email: 'nobody@example.com' }]);
+    expect(writes()).toEqual([REQUEST_RESET, REQUEST_RESET]);
+  });
+
+  it('로그인한 탭에서 내도 — 재설정 요청에 Access Token 을 싣지 않는다', async () => {
+    await renderApp('/reset-password/request', { loggedIn: true, extra: { [REQUEST_RESET]: () => ACCEPTED } });
+
+    submitResetRequest('user@example.com');
+
+    await until([REQUESTED], main);
+    expect(sent(REQUEST_RESET).map((r) => r.auth)).toEqual([null]);
+    // 양성 대조 — 같은 탭의 머리글 조회는 그 토큰을 싣는다.
+    expect(sent('GET /api/v1/members/me')[0].auth).toBe(`Bearer ${accessToken('1')}`);
+  });
+
+  it('이메일 형식이 틀리면(C001) — 입력칸 옆에 보이고 요청을 받았다는 문장이 없다', async () => {
+    const message = '올바른 이메일 형식이 아닙니다.';
+    await renderApp('/reset-password/request', {
+      extra: { [REQUEST_RESET]: () => fail(400, 'C001', [{ field: 'email', message }]) },
+    });
+
+    submitResetRequest('not-an-email');
+
+    await until([message], main);
+    expect(within(beside(within(main()).getByLabelText(/^이메일/))).getByText(message)).toBeInTheDocument();
+    expect(codeShown('C001')).toBeVisible();
+    // 요약에는 다시 적지 않는다 — 한 번만 보인다.
+    expect(within(main()).getAllByText(message)).toHaveLength(1);
+    expect(main()).not.toHaveTextContent(REQUESTED);
+  });
+
+  it('이메일 형식 오류(C001) 뒤에 고쳐 다시 내 202 면 — 앞의 오류를 남기지 않는다', async () => {
+    const message = '올바른 이메일 형식이 아닙니다.';
+    const replies = [(): Reply => fail(400, 'C001', [{ field: 'email', message }]), (): Reply => ACCEPTED];
+    await renderApp('/reset-password/request', { extra: { [REQUEST_RESET]: () => replies.shift()!() } });
+
+    submitResetRequest('not-an-email');
+    await until([message], main);
+    submitResetRequest('user@example.com');
+
+    await until([REQUESTED], main);
+    expect(codeShown('C001')).toBeNull();
+    expect(main()).not.toHaveTextContent(message);
+    expect(sent(REQUEST_RESET).map((r) => r.body)).toEqual([{ email: 'not-an-email' }, { email: 'user@example.com' }]);
+  });
+
+  it('요청을 받았다고 보인 뒤에 다시 낸 것이 실패하면 — 앞의 문장을 남기지 않는다', async () => {
+    const replies = [(): Reply => ACCEPTED, (): Reply => fail(500, 'C005')];
+    await renderApp('/reset-password/request', { extra: { [REQUEST_RESET]: () => replies.shift()!() } });
+
+    submitResetRequest('user@example.com');
+    await until([REQUESTED], main);
+    submitResetRequest('user@example.com');
+
+    await until([ERROR_SENTENCES.C005.text], main);
+    expect(main()).not.toHaveTextContent(REQUESTED);
+  });
+});
+
+/* ───────── 비밀번호 재설정 ───────── */
+
+const CONFIRM_RESET = 'POST /api/v1/accounts/password-reset/confirm';
+/** 재설정 메일의 링크 — 인증 메일과 같이 토큰을 fragment 에 싣는다(sp-docs/requirements/member.md §11.5). */
+const RESET_LINK = `/reset-password#token=${LINK_TOKEN}`;
+const RESET: Routes = { [CONFIRM_RESET]: () => NO_CONTENT };
+const resetButton = () => within(main()).queryByRole('button', { name: /비밀번호 바꾸기|바꾸는 중/ });
+const newPasswordInput = () => screen.getByLabelText(/^새 비밀번호/);
+/** 새 비밀번호의 규칙 위반 — 문장은 sp-docs/requirements/member.md §2 의 비밀번호 규칙의 것이다. */
+const NEW_PASSWORD_RULE = '비밀번호는 8~20자의 영문, 숫자, 특수문자 조합이어야 합니다.';
+
+/** 재설정 화면에 새 비밀번호를 넣고 낸다 — 사용자의 한 동작이다. */
+function submitNewPassword(value: string) {
+  type(newPasswordInput(), value);
+  fireEvent.submit(main().querySelector('form')!);
+}
+
+describe('비밀번호 재설정', () => {
+  it('링크를 열면 — 주소창에서 토큰을 지우고 아무 요청도 보내지 않는다. 기록을 하나 더 쌓지 않는다', async () => {
+    const entries = window.history.length;
+    const stores = await renderApp(RESET_LINK, { extra: RESET });
+
+    await screen.findByLabelText(/^새 비밀번호/);
+    await waitFor(() => expect(window.location.hash).toBe(''));
+    await settled();
+
+    expect(pathname()).toBe('/reset-password');
+    expect(window.location.href).not.toContain(LINK_TOKEN);
+    expect(stores.router.state.location.hash).toBe('');
+    expect(window.history.length).toBe(entries);
+    // 토큰은 화면의 상태에만 있다 — 저장소·스토어·캐시·기록의 상태에 옮겨 두지 않는다.
+    expect(holding(stores, LINK_TOKEN)).toEqual([]);
+    expect(resetButton()).toBeEnabled();
+    expect(sent(CONFIRM_RESET)).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+
+  it('새 비밀번호를 내면 — 링크의 토큰과 함께 한 번 보내고, 토큰을 주지 않으므로 로그인으로 안내한다. 입력칸이 내려간다', async () => {
+    const stores = await renderApp(RESET_LINK, { extra: RESET });
+    await waitFor(() => expect(window.location.hash).toBe(''));
+
+    submitNewPassword(PASSWORD);
+
+    await until(['비밀번호를 바꿨습니다.', '새 비밀번호로 로그인해 주세요.'], main);
+    expect(within(main()).getByRole('link', { name: '로그인하기' })).toHaveAttribute('href', '/login');
+    expect(screen.queryByLabelText(/^새 비밀번호/)).toBeNull();
+    expect(resetButton()).toBeNull();
+    expect(within(main()).queryByRole('link', { name: '비밀번호 찾기' })).toBeNull();
+    expect(sent(CONFIRM_RESET).map((r) => r.body)).toEqual([{ token: LINK_TOKEN, newPassword: PASSWORD }]);
+    expect(writes()).toEqual([CONFIRM_RESET]);
+    expect(stores.useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionGeneration: 0 });
+    // 새 비밀번호를 든 자리가 없다. 양성 대조 — 요청의 설정은 그것을 실었다.
+    expect(holds(sent(CONFIRM_RESET)[0].config, PASSWORD)).toBe(true);
+    expect(holding(stores)).toEqual([]);
+    expect(document.body.innerHTML).not.toContain(PASSWORD);
+  });
+
+  it('로그인한 탭에서 내도 — 확인 요청에 Access Token 을 싣지 않는다. 세션은 그대로다', async () => {
+    const { useAuthStore } = await renderApp(RESET_LINK, { loggedIn: true, extra: RESET });
+    const before = useAuthStore.getState().sessionGeneration;
+    await screen.findByLabelText(/^새 비밀번호/);
+
+    submitNewPassword(PASSWORD);
+
+    await until(['비밀번호를 바꿨습니다.'], main);
+    expect(sent(CONFIRM_RESET).map((r) => r.auth)).toEqual([null]);
+    // 양성 대조 — 같은 탭의 머리글 조회는 그 토큰을 싣는다.
+    expect(sent('GET /api/v1/members/me')[0].auth).toBe(`Bearer ${accessToken('1')}`);
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: accessToken('1'),
+      refreshToken: 'RT-1',
+      sessionGeneration: before,
+    });
+  });
+
+  it('새 비밀번호가 규칙에 맞지 않으면(C001) — 입력칸 옆에 보이고, 고쳐서 다시 내면 같은 토큰으로 보내 마친다', async () => {
+    const replies = [
+      (): Reply => fail(400, 'C001', [{ field: 'newPassword', message: NEW_PASSWORD_RULE }]),
+      (): Reply => NO_CONTENT,
+    ];
+    const stores = await renderApp(RESET_LINK, { extra: { [CONFIRM_RESET]: () => replies.shift()!() } });
+    await waitFor(() => expect(window.location.hash).toBe(''));
+
+    submitNewPassword('short');
+
+    await until([NEW_PASSWORD_RULE], main);
+    expect(within(beside(newPasswordInput())).getByText(NEW_PASSWORD_RULE)).toBeInTheDocument();
+    // 요약에는 다시 적지 않는다 — 한 번만 보인다.
+    expect(within(main()).getAllByText(NEW_PASSWORD_RULE)).toHaveLength(1);
+    expect(codeShown('C001')).toBeVisible();
+    expect(resetButton()).toBeEnabled();
+    // 고쳐 다시 내도록 입력값이 남는다. 토큰은 화면의 상태에만 있다 — 쥔 오류에도 다른 자리에도 없다.
+    expect(newPasswordInput()).toHaveValue('short');
+    expect(holding(stores, LINK_TOKEN)).toEqual([]);
+
+    submitNewPassword(PASSWORD);
+
+    await until(['비밀번호를 바꿨습니다.'], main);
+    const bodies = sent(CONFIRM_RESET).map((r) => r.body as { token: string; newPassword: string });
+    expect(bodies.map((b) => b.newPassword)).toEqual(['short', PASSWORD]);
+    // 두 요청이 같은 토큰을 싣는다 — 주소창의 fragment 는 첫 요청 전에 지웠다. 그 위반은 토큰을 쓰지 않았다(requirements/member.md §11.4).
+    expect(bodies[1].token).toBe(bodies[0].token);
+    expect(bodies[0].token).toBe(LINK_TOKEN);
+    expect(codeShown('C001')).toBeNull();
+    expect(main()).not.toHaveTextContent(NEW_PASSWORD_RULE);
+  });
+
+  it('쓸 수 없는 링크(AU007)면 — 폼을 내리고 비밀번호 찾기로 안내한다. 같은 토큰으로 다시 낼 수 없다', async () => {
+    await renderApp(RESET_LINK, { extra: { [CONFIRM_RESET]: () => fail(400, 'AU007') } });
+    await screen.findByLabelText(/^새 비밀번호/);
+
+    submitNewPassword(PASSWORD);
+
+    await until([PASSWORD_RESET.AU007.text], main);
+    expect(codeShown('AU007')).toBeVisible();
+    // 안내는 오류 상자의 링크다 — 같은 곳으로 가는 링크를 겹쳐 두지 않는다.
+    const box = codeShown('AU007')!.closest<HTMLElement>('.bg-danger-50')!;
+    const find = within(box).getByRole('link', { name: '비밀번호 찾기' });
+    expect(find).toHaveAttribute('href', '/reset-password/request');
+    const links = within(main()).getAllByRole('link', { name: '비밀번호 찾기' });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toBe(find);
+    expect(screen.queryByLabelText(/^새 비밀번호/)).toBeNull();
+    expect(resetButton()).toBeNull();
+    expect(sent(CONFIRM_RESET)).toHaveLength(1);
+
+    fireEvent.click(find);
+    await atPath('/reset-password/request');
+    await screen.findByRole('heading', { name: '비밀번호 찾기' });
+  });
+
+  it('확인이 실패해도 — 화면이 쥐는 오류에 링크의 토큰이 없다. 코드는 보인다', async () => {
+    await renderApp(RESET_LINK, { extra: { [CONFIRM_RESET]: () => fail(400, 'AU007') } });
+    await screen.findByLabelText(/^새 비밀번호/);
+
+    submitNewPassword(PASSWORD);
+    await waitFor(() => expect(screenErrors()).not.toEqual([]));
+
+    // 양성 대조 — 요청은 토큰을 실었다. 실패하면 axios 가 그 설정을 오류에 싣는다(lib/api/withoutRequestBody.ts).
+    expect(holds(sent(CONFIRM_RESET)[0].config, LINK_TOKEN)).toBe(true);
+    expect(holds(screenErrors(), LINK_TOKEN)).toBe(false);
+    expect(document.body.innerHTML).not.toContain(LINK_TOKEN);
+    expect(codeShown('AU007')).toBeVisible();
+  });
+
+  it.each([
+    ['응답 없음', (): Reply => 'no-response', NO_RESPONSE],
+    ['서버 오류', (): Reply => fail(500, 'C005'), ERROR_SENTENCES.C005.text],
+  ])('확인이 %s 로 실패하면 — 그 실패를 보이고 폼이 남는다. 주소창의 토큰을 지운 뒤에도 같은 토큰으로 다시 보낸다', async (_, reply, sentence) => {
+    const replies = [reply, (): Reply => NO_CONTENT];
+    await renderApp(RESET_LINK, { extra: { [CONFIRM_RESET]: () => replies.shift()!() } });
+    await waitFor(() => expect(window.location.hash).toBe(''));
+
+    submitNewPassword(PASSWORD);
+    await until([sentence], main);
+    expect(resetButton()).toBeEnabled();
+    expect(newPasswordInput()).toHaveValue(PASSWORD);
+
+    fireEvent.submit(main().querySelector('form')!);
+    await until(['비밀번호를 바꿨습니다.'], main);
+    expect(sent(CONFIRM_RESET).map((r) => r.body)).toEqual([
+      { token: LINK_TOKEN, newPassword: PASSWORD },
+      { token: LINK_TOKEN, newPassword: PASSWORD },
+    ]);
+  });
+
+  it.each([
+    ['fragment 가 없다', '/reset-password'],
+    ['토큰이 비었다', '/reset-password#token='],
+    ['토큰이 아닌 값이다', '/reset-password#code=abc'],
+    ['토큰이 쿼리에만 있다 — 읽는 것은 fragment 뿐이다', `/reset-password?token=${LINK_TOKEN}`],
+  ])('링크에 토큰이 없으면(%s) — 새 비밀번호를 받지 않고 아무 요청도 보내지 않는다. 비밀번호 찾기로 안내한다', async (_, path) => {
+    await renderApp(path, { extra: RESET });
+
+    await until(['재설정 링크를 찾지 못했습니다.'], main);
+    await settled();
+    expect(screen.queryByLabelText(/^새 비밀번호/)).toBeNull();
+    expect(within(main()).queryByRole('button')).toBeNull();
+    expect(within(main()).getByRole('link', { name: '비밀번호 찾기' })).toHaveAttribute('href', '/reset-password/request');
+    expect(window.location.hash).toBe('');
+    expect(writes()).toEqual([]);
+  });
+});
+
 const entriesOf = (s: Storage) => Array.from({ length: s.length }, (_, i) => [s.key(i), s.getItem(s.key(i)!)]);
 
 /**
@@ -588,8 +874,8 @@ const screenErrors = () => (shownErrors?.mock.calls ?? []).map(([error]) => erro
 /** 그려진 입력칸이 지금 그 값을 쥐었는가. */
 const inputHolds = (value: string) => [...document.querySelectorAll('input')].some((input) => input.value === value);
 
-/** 비밀번호를 들고 있으면 안 되는 자리 가운데 그것을 든 자리의 이름. */
-function holding({ useAuthStore, useApiLogStore, queryClient }: Stores): string[] {
+/** 비밀번호(또는 `needle` — 예: 링크의 토큰)를 들고 있으면 안 되는 자리 가운데 그것을 든 자리의 이름. */
+function holding({ useAuthStore, useApiLogStore, queryClient }: Stores, needle = PASSWORD): string[] {
   const places: Record<string, unknown> = {
     sessionStorage: entriesOf(sessionStorage),
     localStorage: entriesOf(localStorage),
@@ -601,7 +887,7 @@ function holding({ useAuthStore, useApiLogStore, queryClient }: Stores): string[
     mutationCache: queryClient.getMutationCache().getAll().map((m) => [m.options.mutationKey, m.state]),
     screenErrors: screenErrors(),
   };
-  return Object.keys(places).filter((name) => holds(places[name], PASSWORD));
+  return Object.keys(places).filter((name) => holds(places[name], needle));
 }
 
 /**
@@ -717,6 +1003,16 @@ describe('비밀번호를 싣는 요청이 실패한 화면', () => {
       key: WITHDRAW_ACCOUNT,
       open: () => openMyPage({ [WITHDRAW_ACCOUNT]: () => fail(400, 'AU004') }),
       act: () => submitWithdrawal(PASSWORD),
+    },
+    {
+      // 입력칸이 남는 실패다 — 규칙 위반은 고쳐 같은 토큰으로 다시 낸다.
+      name: '비밀번호 재설정',
+      key: CONFIRM_RESET,
+      open: () =>
+        renderApp(RESET_LINK, {
+          extra: { [CONFIRM_RESET]: () => fail(400, 'C001', [{ field: 'newPassword', message: NEW_PASSWORD_RULE }]) },
+        }),
+      act: () => submitNewPassword(PASSWORD),
     },
   ])('$name — 화면이 보이는 오류에 비밀번호가 없다. 코드는 보인다', async ({ key, open, act }) => {
     await open();

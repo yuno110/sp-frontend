@@ -2,7 +2,14 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import http, { describeError, fieldMessages } from './client';
 import { ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE, UNEXPECTED } from './errorCodes';
-import { confirmEmailVerification, login, reissue, resendVerification } from '@/features/auth/api';
+import {
+  confirmEmailVerification,
+  confirmPasswordReset,
+  login,
+  reissue,
+  requestPasswordReset,
+  resendVerification,
+} from '@/features/auth/api';
 import { listPosts } from '@/features/board/api';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -66,7 +73,7 @@ describe('Authorization 헤더', () => {
   });
 
   /**
-   * 로그인과 api-contract.md §2.4 의 무인증 요청(F-08). 스토어에 Access Token 이 있어도 싣지 않는다 — 실으면 서버의 bearer 필터가 그
+   * 로그인과 api-contract.md §2.4 의 무인증 요청(F-08, 비밀번호 재설정은 F-09). 스토어에 Access Token 이 있어도 싣지 않는다 — 실으면 서버의 bearer 필터가 그
    * 토큰을 검증해 만료면 401 `A003`, 잘못됐으면 401 `A002` 로 끊는다(CLAUDE.md 「경계」). '지정하지 않으면 스토어의 토큰을 넣는다' 가 양성 대조다 — 정하지 않은
    * 요청에는 같은 스토어의 토큰이 실린다.
    */
@@ -74,6 +81,8 @@ describe('Authorization 헤더', () => {
     ['로그인', '/api/v1/auth/login', () => login('user@example.com', 'Passw0rd!'), { success: true, data: TOKENS, error: null }],
     ['인증 메일 재발송', '/api/v1/accounts/email-verification', () => resendVerification('user@example.com'), { success: true, data: null, error: null }],
     ['이메일 인증 확인', '/api/v1/accounts/email-verification/confirm', () => confirmEmailVerification('link-token'), ''],
+    ['비밀번호 재설정 요청', '/api/v1/accounts/password-reset', () => requestPasswordReset('user@example.com'), { success: true, data: null, error: null }],
+    ['비밀번호 재설정 확인', '/api/v1/accounts/password-reset/confirm', () => confirmPasswordReset('link-token', 'NewPassw0rd!'), ''],
   ] as const)('%s — 스토어에 Access Token 이 있어도 헤더를 싣지 않는다', async (_, url, call, body) => {
     stubAdapter(body);
     await call();

@@ -1,5 +1,6 @@
 import {
   CONFIRM_EMAIL,
+  CONFIRM_PASSWORD_RESET,
   LINK_TOKEN,
   ME,
   MY_PROFILE,
@@ -7,6 +8,8 @@ import {
   NOTICE_POST,
   NO_CONTENT,
   OTHER_POST,
+  REQUEST_PASSWORD_RESET,
+  RESET_LINK,
   VERIFY_LINK,
   fail,
   ok,
@@ -18,6 +21,7 @@ import { expect, test } from './fixtures.ts';
 
 /**
  * 가입·로그인·글 작성을 키보드만으로 끝낸다 (sp-docs/plan/phase2.md §7.2 F-05). 글 목록의 카테고리 탭도 키보드로 고른다(F-12).
+ * 비밀번호 재설정 — 찾기에서 메일을 요청하고 메일의 링크로 새 비밀번호를 내는 흐름도 키보드로 끝낸다(F-09).
  *
  * 포커스는 Tab 으로만 옮기고 제출은 Enter 로 한다. 탭 버튼은 Space 와 Enter 로 누른다. 입력칸은 라벨 이름으로 찾는다 — 화면을
  * 읽어 주는 도구가 그 이름을 읽는다.
@@ -112,6 +116,67 @@ test('가입 — 계정을 만들고, 메일의 링크로 인증하고, 로그�
   ]);
   expect(api.sent.find((s) => s.key === CONFIRM_EMAIL)?.body).toEqual({ token: LINK_TOKEN });
   expect(api.sent.find((s) => s.key === 'POST /api/v1/members')?.body).toEqual({ nickname: NICKNAME });
+});
+
+test('비밀번호 재설정 — 로그인 화면에서 찾기로 가 메일을 요청하고, 메일의 링크로 새 비밀번호를 정해 로그인한다', async ({
+  page,
+  api,
+}) => {
+  const newPassword = 'NewPassw0rd!';
+  api.use({
+    [REQUEST_PASSWORD_RESET]: ok(null, 202),
+    [CONFIRM_PASSWORD_RESET]: NO_CONTENT,
+    'POST /api/v1/auth/login': () => ok(tokens(ME)),
+  });
+  await page.goto('/login');
+  const main = page.getByRole('main');
+
+  // 로그인 화면의 링크로 비밀번호 찾기에 가서 재설정 메일을 요청한다.
+  await tabTo(page, main.getByRole('link', { name: '비밀번호 찾기', exact: true }));
+  await page.keyboard.press('Enter');
+  await page.waitForURL((url) => url.pathname === '/reset-password/request');
+  await tabTo(page, main.getByLabel('이메일', { exact: true }));
+  await page.keyboard.type(EMAIL);
+  await tabTo(page, main.getByRole('button', { name: '재설정 메일 보내기', exact: true }));
+  await page.keyboard.press('Enter');
+  await expect(main.getByText('요청을 받았습니다.', { exact: false })).toBeVisible();
+
+  // 메일의 링크를 연다 — 주소창에서 토큰이 사라지고, 새 비밀번호를 내기 전에는 확인하지 않는다(sp-docs/security.md §12).
+  await page.goto(RESET_LINK);
+  const input = main.getByLabel('새 비밀번호', { exact: true });
+  await expect(input).toBeVisible();
+  await expect.poll(() => new URL(page.url()).hash).toBe('');
+  expect(page.url()).not.toContain(LINK_TOKEN);
+  expect(api.keys().filter((k) => k === CONFIRM_PASSWORD_RESET)).toEqual([]);
+  await tabTo(page, input);
+  await page.keyboard.type(newPassword);
+  await tabTo(page, main.getByRole('button', { name: '비밀번호 바꾸기', exact: true }));
+  await page.keyboard.press('Enter');
+  await expect(main.getByText('비밀번호를 바꿨습니다.')).toBeVisible();
+
+  // 재설정은 토큰을 주지 않는다 — 안내를 따라 새 비밀번호로 로그인한다.
+  await tabTo(page, main.getByRole('link', { name: '로그인하기', exact: true }));
+  await page.keyboard.press('Enter');
+  await page.waitForURL((url) => url.pathname === '/login');
+  await tabTo(page, main.getByLabel('이메일', { exact: true }));
+  await page.keyboard.type(EMAIL);
+  await tabTo(page, main.getByLabel('비밀번호', { exact: true }));
+  await page.keyboard.type(newPassword);
+  await tabTo(page, main.getByRole('button', { name: '로그인', exact: true }));
+  await page.keyboard.press('Enter');
+
+  await page.waitForURL((url) => url.pathname === '/posts');
+  await expect(page.getByRole('banner').getByText(NICKNAME)).toBeVisible();
+  expect(api.keys().filter((k) => k.startsWith('POST'))).toEqual([
+    REQUEST_PASSWORD_RESET,
+    CONFIRM_PASSWORD_RESET,
+    'POST /api/v1/auth/login',
+  ]);
+  expect(api.sent.filter((s) => s.key.startsWith('POST')).map((s) => s.body)).toEqual([
+    { email: EMAIL },
+    { token: LINK_TOKEN, newPassword },
+    { email: EMAIL, password: newPassword },
+  ]);
 });
 
 test('글 작성', async ({ page, api }) => {

@@ -161,6 +161,7 @@ const RECOVERY: Record<Recovery, { to: string; label: string }> = {
   login: { to: '/login', label: '로그인하기' },
   signup: { to: '/signup', label: '새 계정 만들기' },
   resendVerification: { to: '/verify-email/resend', label: '인증 메일 다시 받기' },
+  requestPasswordReset: { to: '/reset-password/request', label: '비밀번호 찾기' },
 };
 
 export function RecoveryLink({ recovery, className }: { recovery: Recovery; className?: string }) {
