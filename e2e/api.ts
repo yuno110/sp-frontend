@@ -41,6 +41,7 @@ const ERRORS = {
   M001: { status: 404, message: '프로필을 찾을 수 없습니다.' },
   M007: { status: 409, message: '탈퇴한 프로필입니다.' },
   P001: { status: 404, message: '게시글을 찾을 수 없습니다.' },
+  P003: { status: 403, message: '공지를 작성하거나 변경할 권한이 없습니다.' },
   S002: { status: 403, message: '활성 프로필이 필요합니다.' },
   AU003: { status: 401, message: '이메일 또는 비밀번호가 일치하지 않습니다.' },
   AU006: { status: 403, message: '이메일 인증이 필요합니다.' },
@@ -69,6 +70,8 @@ export interface Who {
 }
 
 export const ME: Who = { accountId: 7, role: 'USER' };
+/** 공지를 쓰는 역할(sp-docs/requirements/board.md §8). */
+export const ADMIN: Who = { accountId: 1, role: 'ADMIN' };
 export const OTHER_ID = 12;
 export const WITHDRAWN_ID = 13;
 
@@ -107,27 +110,68 @@ export const NICKNAME = '열글자까지쓰는닉네임';
 export const TITLE = `${LONG_WORD} 를 붙인 제목 ${'가나다라 '.repeat(40)}`.slice(0, 200);
 const CREATED_AT = '2026-10-27T09:00:00';
 
+// 목록 항목의 키는 §4.3 의 목록 항목 줄이고, 상세는 거기에 `content`·`liked`·`attachments` 를 더한 것이다(§9.3·§9.6).
+
 export const POST = {
   id: 1,
   title: TITLE,
+  category: 'FREE',
   writerId: ME.accountId,
   writerNickname: NICKNAME,
   viewCount: 152,
   commentCount: 2,
+  likeCount: 4,
   createdAt: CREATED_AT,
 };
 
 export const OTHER_POST = {
   id: 2,
   title: '짧은 글',
+  category: 'QNA',
   writerId: OTHER_ID,
   writerNickname: '다른사람',
   viewCount: 0,
   commentCount: 0,
+  likeCount: 0,
   createdAt: '2026-10-26T18:30:00',
 };
 
-export const POST_DETAIL = { ...POST, content: `본문 첫 줄\n${LONG_WORD}\n${'본문을 채우는 문장입니다. '.repeat(20)}` };
+/** 공지 — 관리자의 글이고 가장 최근 글이다. 전체 목록에도 들어 있다(§4.1). 제목에 띄어쓰기 없는 긴 낱말을 둔다. */
+export const NOTICE_POST = {
+  id: 3,
+  title: `점검 안내 ${LONG_WORD}`,
+  category: 'NOTICE',
+  writerId: ADMIN.accountId,
+  writerNickname: '관리자',
+  viewCount: 40,
+  commentCount: 0,
+  likeCount: 1,
+  createdAt: '2026-10-28T09:00:00',
+};
+
+export const POST_DETAIL = {
+  ...POST,
+  content: `본문 첫 줄\n${LONG_WORD}\n${'본문을 채우는 문장입니다. '.repeat(20)}`,
+  liked: false,
+  attachments: [],
+};
+
+/** 요청의 `category` 쿼리(§4.1). 없으면 `null` 이다. */
+export const categoryOf = (request: Request) => new URL(request.url()).searchParams.get('category');
+
+/** 글 목록의 답 — `category` 가 있으면 그 카테고리의 글만 준다. 없으면 모든 카테고리이고 공지도 들어간다(§4.1). */
+export const listOf =
+  (posts: Array<{ category: string }>): Answer =>
+  (request) => {
+    const category = categoryOf(request);
+    return ok(pageOf(category ? posts.filter((post) => post.category === category) : posts));
+  };
+
+/** 상세의 `liked` 는 토큰이 없으면 `null` 이다 — 키는 언제나 있다(§4.3). */
+const detailOf =
+  (detail: typeof POST_DETAIL): Answer =>
+  (request) =>
+    ok({ ...detail, liked: request.headers().authorization ? detail.liked : null });
 
 export const COMMENTS = [
   { id: 5, writerId: ME.accountId, writerNickname: NICKNAME, content: `내 댓글 ${LONG_WORD}`, createdAt: '2026-10-27T09:30:00' },
@@ -149,9 +193,9 @@ export const MY_PROFILE_WITHDRAWN: Routes = {
 
 /** 기본 답. 테스트가 `use` 로 덮는다. */
 const BASE: Routes = {
-  'GET /api/v1/posts': ok(pageOf([POST, OTHER_POST])),
+  'GET /api/v1/posts': listOf([NOTICE_POST, POST, OTHER_POST]),
   'GET /api/v1/posts/me': ok(pageOf([POST])),
-  'GET /api/v1/posts/1': ok(POST_DETAIL),
+  'GET /api/v1/posts/1': detailOf(POST_DETAIL),
   'GET /api/v1/posts/1/comments': ok(pageOf(COMMENTS, 20)),
   'GET /api/v1/members/me': ok(MY_PROFILE),
   'GET /api/v1/accounts/me': ok({ email: EMAIL, createdAt: '2026-10-27T08:00:00' }),

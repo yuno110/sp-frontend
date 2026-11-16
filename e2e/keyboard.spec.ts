@@ -4,7 +4,9 @@ import {
   ME,
   MY_PROFILE,
   NICKNAME,
+  NOTICE_POST,
   NO_CONTENT,
+  OTHER_POST,
   VERIFY_LINK,
   fail,
   ok,
@@ -15,9 +17,10 @@ import { tabTo } from './checks.ts';
 import { expect, test } from './fixtures.ts';
 
 /**
- * 가입·로그인·글 작성을 키보드만으로 끝낸다 (sp-docs/plan/phase2.md §7.2 F-05).
+ * 가입·로그인·글 작성을 키보드만으로 끝낸다 (sp-docs/plan/phase2.md §7.2 F-05). 글 목록의 카테고리 탭도 키보드로 고른다(F-12).
  *
- * 포커스는 Tab 으로만 옮기고 제출은 Enter 로 한다. 입력칸은 라벨 이름으로 찾는다 — 화면을 읽어 주는 도구가 그 이름을 읽는다.
+ * 포커스는 Tab 으로만 옮기고 제출은 Enter 로 한다. 탭 버튼은 Space 와 Enter 로 누른다. 입력칸은 라벨 이름으로 찾는다 — 화면을
+ * 읽어 주는 도구가 그 이름을 읽는다.
  * Tab 으로 지나는 요소마다 `outline`·`box-shadow` 계산값이 포커스 전과 달라야 한다(e2e/checks.ts 의 `tabTo`).
  */
 
@@ -117,12 +120,16 @@ test('글 작성', async ({ page, api }) => {
   const created = {
     id: 3,
     title,
+    category: 'FREE',
+    content,
     writerId: ME.accountId,
     writerNickname: NICKNAME,
     viewCount: 0,
     commentCount: 0,
+    likeCount: 0,
+    liked: false,
+    attachments: [],
     createdAt: '2026-10-28T09:00:00',
-    content,
   };
   await api.login();
   api.use({
@@ -146,5 +153,27 @@ test('글 작성', async ({ page, api }) => {
 
   await page.waitForURL((url) => url.pathname === '/posts/3');
   await expect(main.getByRole('heading', { name: title })).toBeVisible();
-  expect(api.sent.find((s) => s.key === 'POST /api/v1/posts')?.body).toEqual({ title, content });
+  // 카테고리를 고르지 않았다 — 폼의 처음 값(자유)이 실린다.
+  expect(api.sent.find((s) => s.key === 'POST /api/v1/posts')?.body).toEqual({ title, content, category: 'FREE' });
+});
+
+test('글 목록 — 카테고리 탭에 Tab 으로 닿고 Space·Enter 로 고른다', async ({ page }) => {
+  await page.goto('/posts');
+  const main = page.getByRole('main');
+  const tab = (name: string) => main.getByRole('group', { name: '카테고리' }).getByRole('button', { name, exact: true });
+  // 스텁은 카테고리로 거른다(e2e/api.ts 의 `listOf`) — 그려진 글이 어느 탭의 답인지 가른다.
+  const rows = main.getByRole('table').getByRole('row');
+  await expect(rows.filter({ hasText: OTHER_POST.title })).toBeVisible();
+
+  await tabTo(page, tab('공지'));
+  await page.keyboard.press('Space');
+  await expect(tab('공지')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows.filter({ hasText: NOTICE_POST.title })).toBeVisible();
+  await expect(rows.filter({ hasText: OTHER_POST.title })).toHaveCount(0);
+
+  await tabTo(page, tab('질문'));
+  await page.keyboard.press('Enter');
+  await expect(tab('질문')).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows.filter({ hasText: OTHER_POST.title })).toBeVisible();
+  await expect(rows.filter({ hasText: NOTICE_POST.title })).toHaveCount(0);
 });

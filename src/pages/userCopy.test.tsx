@@ -47,6 +47,7 @@ const SERVER_MESSAGE: Record<string, string> = {
   M001: '프로필을 찾을 수 없습니다.',
   M007: '탈퇴한 프로필입니다.',
   P001: '게시글을 찾을 수 없습니다.',
+  P003: '공지를 작성하거나 변경할 권한이 없습니다.',
   CM002: '댓글에 대한 권한이 없습니다.',
   S001: '일시적으로 서비스 연동에 실패했습니다.',
   S002: '활성 프로필이 필요합니다.',
@@ -65,15 +66,31 @@ const fail = (status: number, code: string, fieldErrors: FieldErrors = [], messa
 
 const PROFILE = { accountId: 7, nickname: '테스트닉' };
 const ACCOUNT = { email: 'user@example.com', createdAt: '2026-10-27T10:00:00' };
+/** 목록 항목 — 키는 api-contract.md §4.3 의 목록 항목 줄이다(§9.3). */
 const POST = {
   id: 1,
   title: '첫 글',
+  category: 'FREE',
   writerId: 7,
   writerNickname: '테스트닉',
   viewCount: 3,
   commentCount: 1,
+  likeCount: 2,
   createdAt: '2026-10-27T09:00:00',
-  content: '본문입니다',
+};
+/** 상세 — 목록 항목의 키에 `content`·`liked`·`attachments` 를 더한 것(§4.3·§9.6). `liked` 는 토큰이 없으면 `null` 이다. */
+const POST_DETAIL = { ...POST, content: '본문입니다', liked: false, attachments: [] };
+/** 공지 — 관리자의 글이다. 전체 목록에 들고 최근 공지 영역에도 보인다(F-12). */
+const NOTICE = {
+  id: 2,
+  title: '점검 안내',
+  category: 'NOTICE',
+  writerId: 1,
+  writerNickname: '관리자',
+  viewCount: 10,
+  commentCount: 0,
+  likeCount: 0,
+  createdAt: '2026-10-28T09:00:00',
 };
 const COMMENT = { id: 5, writerId: 7, writerNickname: '테스트닉', content: '첫 댓글', createdAt: '2026-10-27T09:30:00' };
 const pageOf = (content: unknown[]) => ({
@@ -89,9 +106,10 @@ const pageOf = (content: unknown[]) => ({
 const BASE: Routes = {
   'GET /api/v1/members/me': () => ok(PROFILE),
   'GET /api/v1/accounts/me': () => ok(ACCOUNT),
-  'GET /api/v1/posts': () => ok(pageOf([POST])),
+  'GET /api/v1/posts': () => ok(pageOf([NOTICE, POST])),
+  'GET /api/v1/posts?category=NOTICE': () => ok(pageOf([NOTICE])),
   'GET /api/v1/posts/me': () => ok(pageOf([POST])),
-  'GET /api/v1/posts/1': () => ok(POST),
+  'GET /api/v1/posts/1': (config) => ok({ ...POST_DETAIL, liked: config.headers?.Authorization ? POST_DETAIL.liked : null }),
   'GET /api/v1/posts/1/comments': () => ok(pageOf([COMMENT])),
   'GET /api/v1/members/7': () => ok({ ...PROFILE, createdAt: '2026-10-27T09:00:00', deleted: false }),
   'GET /api/v1/members/13': () =>
@@ -114,8 +132,18 @@ const WITHDRAWN_PROFILE_ROUTES: Routes = {
 let routes: Routes = {};
 const requests: string[] = [];
 
-async function adapter(config: InternalAxiosRequestConfig): Promise<AxiosResponse> {
+/**
+ * `METHOD 경로`. 쿼리의 `category` 만 붙인다(`GET /api/v1/posts?category=NOTICE`) — 글 목록 화면은 최근 공지를 같은 경로로 따로 묻는다
+ * (F-12). 붙이지 않으면 목록의 답을 덮는 상태가 그 영역의 답까지 덮는다.
+ */
+function keyOf(config: InternalAxiosRequestConfig) {
   const key = `${config.method?.toUpperCase()} ${config.url}`;
+  const category = (config.params as { category?: string } | undefined)?.category;
+  return category ? `${key}?category=${category}` : key;
+}
+
+async function adapter(config: InternalAxiosRequestConfig): Promise<AxiosResponse> {
+  const key = keyOf(config);
   requests.push(key);
   const handler = routes[key];
   if (!handler) throw new Error(`스텁에 없는 요청: ${key}`);
@@ -274,12 +302,29 @@ interface CopyState {
 }
 
 const COPY_STATES: CopyState[] = [
-  { name: '목록 — 비로그인', path: '/posts', ready: () => until([POST.title]) },
+  // 목록은 최근 공지 영역과 공지 배지를 함께 그린다(F-12).
+  { name: '목록 — 비로그인', path: '/posts', ready: () => until([POST.title, '최근 공지']) },
   {
     name: '목록 — 로그인',
     path: '/posts',
     as: ME,
-    ready: () => Promise.all([until([POST.title]), until(['테스트닉'], banner)]),
+    ready: () => Promise.all([until([POST.title, '최근 공지']), until(['테스트닉'], banner)]),
+  },
+  {
+    name: '목록 — 카테고리 탭을 고름',
+    path: '/posts',
+    extra: { 'GET /api/v1/posts?category=QNA': () => ok(pageOf([{ ...POST, id: 3, title: '질문 글', category: 'QNA' }])) },
+    ready: async () => {
+      await until([POST.title], main);
+      fireEvent.click(within(screen.getByRole('group', { name: '카테고리' })).getByRole('button', { name: '질문' }));
+      await until(['질문 글'], main);
+    },
+  },
+  {
+    name: '목록 — 최근 공지를 받지 못함',
+    path: '/posts',
+    extra: { 'GET /api/v1/posts?category=NOTICE': () => fail(500, 'C005') },
+    ready: () => Promise.all([until([POST.title, '최근 공지'], main), errorShown()]),
   },
   {
     name: '내 글',
@@ -291,19 +336,19 @@ const COPY_STATES: CopyState[] = [
     name: '글 상세 — 내 글과 내 댓글',
     path: '/posts/1',
     as: ME,
-    ready: () => Promise.all([until([POST.content, COMMENT.content]), until(['테스트닉'], banner)]),
+    ready: () => Promise.all([until([POST_DETAIL.content, COMMENT.content]), until(['테스트닉'], banner)]),
   },
   {
     name: '글 상세 — 관리자가 남의 글을 볼 때',
     path: '/posts/1',
     as: ADMIN,
     extra: { 'GET /api/v1/members/me': () => ok({ accountId: 1, nickname: '관리자' }) },
-    ready: () => Promise.all([until([POST.content, COMMENT.content]), until(['관리자'], banner)]),
+    ready: () => Promise.all([until([POST_DETAIL.content, COMMENT.content]), until(['관리자'], banner)]),
   },
   {
     name: '글 상세 — 비로그인',
     path: '/posts/1',
-    ready: () => until([POST.content, COMMENT.content, '댓글을 쓰려면']),
+    ready: () => until([POST_DETAIL.content, COMMENT.content, '댓글을 쓰려면']),
   },
   {
     name: '글 상세 — 댓글 수정 중',
@@ -353,6 +398,30 @@ const COPY_STATES: CopyState[] = [
     },
   },
   { name: '글쓰기', path: '/posts/new', as: ME, ready: () => until(['새 글', '테스트닉']) },
+  {
+    // 공지 선택지는 ADMIN 에게만 그린다(F-12).
+    name: '글쓰기 — 관리자',
+    path: '/posts/new',
+    as: ADMIN,
+    extra: { 'GET /api/v1/members/me': () => ok({ accountId: 1, nickname: '관리자' }) },
+    ready: () => until(['새 글', '공지', '관리자']),
+  },
+  {
+    name: '글쓰기 — 공지 권한 없음',
+    path: '/posts/new',
+    as: ADMIN,
+    extra: {
+      'GET /api/v1/members/me': () => ok({ accountId: 1, nickname: '관리자' }),
+      'POST /api/v1/posts': () => fail(403, 'P003'),
+    },
+    ready: async () => {
+      await until(['새 글']);
+      type(screen.getByLabelText('카테고리'), 'NOTICE');
+      fireEvent.submit(main().querySelector('form')!);
+      await errorShown();
+      await until([ERROR_SENTENCES.P003.text], main);
+    },
+  },
   {
     name: '글쓰기 — 입력 오류',
     path: '/posts/new',
@@ -1085,7 +1154,7 @@ describe('공개 화면에서 세션이 끝날 때', () => {
 
   it.each([
     ['목록', '/posts', [POST.title]],
-    ['글 상세', '/posts/1', [POST.content]],
+    ['글 상세', '/posts/1', [POST_DETAIL.content]],
     ['작성자 프로필', '/members/7', ['테스트닉']],
     ['가입', '/signup', ['계정 만들기']],
     ['이메일 인증', VERIFY_LINK, ['이메일 인증하기']],

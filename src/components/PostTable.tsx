@@ -1,7 +1,17 @@
 import { Link } from 'react-router-dom';
 import { MessageSquare } from 'lucide-react';
-import type { PostListItem } from '@/features/board/types';
+import { CATEGORY_LABEL, type PostListItem } from '@/features/board/types';
 import { formatDateTime } from '@/lib/format';
+
+/** 공지 배지 — 제목 앞에 둔다. 공지가 아닌 글에는 배지가 없다(F-12). */
+function NoticeBadge({ item }: { item: PostListItem }) {
+  if (item.category !== 'NOTICE') return null;
+  return (
+    <span className="mr-1.5 whitespace-nowrap rounded-sm bg-accent-50 px-1.5 py-0.5 text-xs font-medium text-accent-700">
+      {CATEGORY_LABEL.NOTICE}
+    </span>
+  );
+}
 
 /**
  * 목록 항목에는 content 가 없다 — 크기 때문이다 (api-contract.md §4.3).
@@ -29,6 +39,7 @@ export function PostTable({ items }: { items: PostListItem[] }) {
             <tr key={item.id} className="border-b border-line-soft last:border-0 hover:bg-subtle">
               <td className="px-3 py-2 text-center font-mono text-xs text-faint">{item.id}</td>
               <td className="px-3 py-2">
+                <NoticeBadge item={item} />
                 <Link to={`/posts/${item.id}`} className="text-default wrap-anywhere hover:text-accent-600">
                   {item.title}
                 </Link>
@@ -61,6 +72,7 @@ export function PostTable({ items }: { items: PostListItem[] }) {
       <ul className="divide-y divide-[var(--color-line-soft)] rounded-md border border-line bg-elev text-sm md:hidden">
         {items.map((item) => (
           <li key={item.id} className="px-3 py-2.5">
+            <NoticeBadge item={item} />
             <Link to={`/posts/${item.id}`} className="text-default wrap-anywhere hover:text-accent-600">
               {item.title}
             </Link>

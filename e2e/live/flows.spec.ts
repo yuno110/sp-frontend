@@ -51,6 +51,27 @@ const nextGet = (page: Page, path: string) =>
   page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path);
 
 /**
+ * 글 목록 화면의 다음 두 GET 이 끝난다 — 목록과 최근 공지다. 화면은 둘을 같은 경로로 함께 묻고(F-12) 쿼리의 `category` 로 갈린다.
+ * 문서를 옮기면(`page.goto`·새로고침) 도는 요청이 끊겨 실패한 요청으로 남으므로, 목록 화면 뒤에 문서를 옮기는 흐름은 이것을 기다린다.
+ * 화면을 열기 전에 부른다.
+ */
+const nextLists = (page: Page) =>
+  Promise.all(
+    [false, true].map(async (notices) => {
+      const response = await page.waitForResponse((r) => {
+        const url = new URL(r.url());
+        return (
+          r.request().method() === 'GET' &&
+          url.pathname === '/api/v1/posts' &&
+          (url.searchParams.get('category') === 'NOTICE') === notices
+        );
+      });
+      await response.finished();
+      return response;
+    }),
+  );
+
+/**
  * 상세가 그 응답을 그렸다. 상세는 받아 둔 것을 먼저 그리고 다시 받는다 — 상세 조회는 조회수를 올리므로 다시 받은 응답의
  * 조회수가 보이면 그 응답이 그려진 것이다.
  */
@@ -167,12 +188,14 @@ async function firstLogin(page: Page, account: Account) {
   await at(page, '/signup/profile');
 }
 
-/** 프로필을 등록한다. 목록이 다 그려지면 끝난다. */
+/** 프로필을 등록한다. 목록이 다 그려지고 목록 화면의 조회가 끝나면 끝난다 — 뒤따르는 흐름이 새로고침할 수 있다. */
 async function registerProfile(page: Page, account: Account) {
   await main(page).getByLabel('닉네임', { exact: true }).fill(account.nickname);
+  const listed = nextLists(page);
   await main(page).getByRole('button', { name: '프로필 등록', exact: true }).click();
   await at(page, '/posts');
   await expectLoggedIn(page, account.nickname);
+  await listed;
   await listShown(page);
 }
 
@@ -194,10 +217,10 @@ async function signUp(page: Page, account: Account = newAccount()): Promise<Acco
  */
 async function openProtected(page: Page) {
   // 목록은 받아 둔 것을 먼저 그리고 다시 받는다 — 다시 받는 응답이 끝나기 전에 떠나면 그 요청이 끊겨 실패한 요청으로 남는다.
-  const relisted = nextGet(page, '/api/v1/posts');
+  const relisted = nextLists(page);
   await banner(page).getByRole('link', { name: '게시판', exact: true }).click();
   await at(page, '/posts');
-  await (await relisted).finished();
+  await relisted;
   await listShown(page);
   await banner(page).getByRole('link', { name: '마이페이지', exact: true }).click();
   await at(page, '/login');
@@ -361,8 +384,8 @@ test('글 작성 → 상세 → 수정 → 삭제 — 각 단계가 반영되고
   await expect(main(page).getByText(edited.content, { exact: true })).toBeVisible();
 
   // 삭제. 목록은 받아 둔 것을 먼저 그리고 다시 받는다 — 받아 둔 목록에는 원래 제목이 있다. 그것이 사라지면 다시 받은 목록이고,
-  // 거기에 고친 제목도 없어야 한다. 주소로 열면 없는 글이다.
-  const relisted = nextGet(page, '/api/v1/posts');
+  // 거기에 고친 제목도 없어야 한다. 주소로 열면 없는 글이다 — 목록 화면의 조회가 끝난 뒤에 연다.
+  const relisted = nextLists(page);
   await postPanel(page).getByRole('button', { name: '삭제', exact: true }).click();
   await at(page, '/posts');
   await relisted;

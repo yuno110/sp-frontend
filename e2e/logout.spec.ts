@@ -23,7 +23,15 @@ const SCREENS: Array<[string, string, (page: Page) => Promise<void>]> = [
       await expect(main(page).getByText('짧은 댓글', { exact: true })).toBeVisible();
     },
   ],
-  ['글 목록', '/posts', (page) => expect(main(page).getByRole('link', { name: '짧은 글', exact: true })).toBeVisible()],
+  [
+    '글 목록',
+    '/posts',
+    // 목록과 최근 공지는 따로 묻는다 — 둘 다 그려진 뒤에 센다.
+    async (page) => {
+      await expect(main(page).getByRole('link', { name: '짧은 글', exact: true })).toBeVisible();
+      await expect(main(page).getByRole('heading', { name: '최근 공지', exact: true })).toBeVisible();
+    },
+  ],
   ['마이페이지', '/me', (page) => expect(main(page).getByRole('heading', { name: '마이페이지', exact: true })).toBeVisible()],
 ];
 

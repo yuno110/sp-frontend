@@ -2228,15 +2228,20 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
  * e2e/live/flows.spec.ts 가 본다.
  */
 describe('로그아웃과 탈퇴 — 떠나는 화면', () => {
+  /** 상세 — 키 집합은 sp-docs/api-contract.md §4.3 이다. */
   const POST = {
     id: 1,
     title: '글 제목',
+    category: 'FREE',
+    content: '글 본문',
     writerId: PROFILE.accountId,
     writerNickname: PROFILE.nickname,
     viewCount: 3,
     commentCount: 0,
+    likeCount: 0,
+    liked: false,
+    attachments: [],
     createdAt: '2026-10-27T10:00:00',
-    content: '글 본문',
   };
   const ON_DETAIL: Routes = {
     'GET /api/v1/posts/1': () => ok(POST),
@@ -2289,15 +2294,20 @@ describe('요청을 기다리는 사이에 떠난 화면', () => {
   const CREATE_POST = 'POST /api/v1/posts';
   const UPDATE_POST = 'PUT /api/v1/posts/1';
   const DELETE_POST = 'DELETE /api/v1/posts/1';
+  /** 상세 — 키 집합은 sp-docs/api-contract.md §4.3 이다. */
   const POST = {
     id: 1,
     title: '글 제목',
+    category: 'FREE',
+    content: '글 본문',
     writerId: PROFILE.accountId,
     writerNickname: PROFILE.nickname,
     viewCount: 3,
     commentCount: 0,
+    likeCount: 0,
+    liked: false,
+    attachments: [],
     createdAt: '2026-10-27T10:00:00',
-    content: '글 본문',
   };
   const ON_DETAIL: Routes = {
     'GET /api/v1/posts/1': () => ok(POST),

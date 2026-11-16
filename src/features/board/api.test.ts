@@ -50,4 +50,18 @@ describe('listPosts 의 검색 파라미터 조합', () => {
       keyword: '홍길동',
     });
   });
+
+  // category 는 검색·정렬과 AND 로 걸린다(§4.1). 주지 않으면 싣지 않는다 — 이 describe 의 다른 단언이 category 없이 불러 그 키가
+  // 없는 객체와 견준다.
+  it('category 가 있으면 검색·정렬과 함께 보낸다', async () => {
+    await listPosts({ page: 2, size: 10, sort: 'views', searchType: 'TITLE', keyword: '점검', category: 'QNA' });
+    expect(paramsOf()).toEqual({
+      page: 2,
+      size: 10,
+      sort: 'views',
+      searchType: 'TITLE',
+      keyword: '점검',
+      category: 'QNA',
+    });
+  });
 });

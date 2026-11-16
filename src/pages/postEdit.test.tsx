@@ -30,22 +30,26 @@ const ok = (data: unknown): Reply => ({ status: 200, body: { success: true, data
 const DETAIL = 'GET /api/v1/posts/9';
 const UPDATE = 'PUT /api/v1/posts/9';
 
-/** 서버에 있는 글의 제목·본문. */
-let stored = { title: '처음 제목', content: '처음 본문' };
+/** 서버에 있는 글의 제목·카테고리·본문. 카테고리는 폼의 처음 값(자유)과 다르다 — 받은 값으로 채웠는지 가른다. */
+let stored = { title: '처음 제목', category: 'QNA', content: '처음 본문' };
 let views = 0;
 /** 켜 두면 상세 조회의 응답을 `release` 까지 붙든다. */
 let holding = false;
 const held: Array<() => void> = [];
 const release = () => held.splice(0).forEach((resolve) => resolve());
 
+/** 상세 — 목록 항목의 키에 `content`·`liked`·`attachments` 를 더한 것(sp-docs/api-contract.md §4.3). */
 const post = () => ({
   id: 9,
+  ...stored,
   writerId: 7,
   writerNickname: '테스트닉',
-  commentCount: 0,
-  createdAt: '2026-10-27T09:00:00',
-  ...stored,
   viewCount: views,
+  commentCount: 0,
+  likeCount: 0,
+  liked: false,
+  attachments: [],
+  createdAt: '2026-10-27T09:00:00',
 });
 
 const ROUTES: Routes = {
@@ -117,7 +121,7 @@ async function renderApp(path: string) {
 beforeEach(() => {
   sessionStorage.clear();
   requests.length = 0;
-  stored = { title: '처음 제목', content: '처음 본문' };
+  stored = { title: '처음 제목', category: 'QNA', content: '처음 본문' };
   views = 0;
   holding = false;
   held.length = 0;
@@ -157,7 +161,7 @@ describe('글 수정 — 입력칸을 채우는 때', () => {
   it('수정 화면이 스스로 받은 값으로 채운다 — 받기 전에는 폼을 그리지 않고, 상세가 받아 둔 값으로 채우지 않는다', async () => {
     // 상세가 받아 둔 뒤 서버의 글이 바뀌었다(다른 곳에서 고쳤다).
     await openEditFromDetail(() => {
-      stored = { title: '다른 곳에서 고친 제목', content: '다른 곳에서 고친 본문' };
+      stored = { ...stored, title: '다른 곳에서 고친 제목', content: '다른 곳에서 고친 본문' };
       holding = true;
     });
 
@@ -178,9 +182,12 @@ describe('글 수정 — 입력칸을 채우는 때', () => {
     const { queryClient } = await openEditFromDetail();
     const title = await screen.findByLabelText(/^제목/);
     const content = screen.getByLabelText(/^본문/);
+    const category = screen.getByLabelText('카테고리');
     await waitFor(() => expect(title).toHaveValue('처음 제목'));
+    expect(category).toHaveValue('QNA');
     type(title, '고친 제목');
     type(content, '고친 본문');
+    type(category, 'FREE');
 
     // 다시 받는다 — 조회수가 올라 앞의 응답과 다른 값이 온다. 결과는 곧바로 화면에 알린다(renderApp 의 스케줄러).
     const before = sent(DETAIL).length;
@@ -190,10 +197,13 @@ describe('글 수정 — 입력칸을 채우는 때', () => {
     expect(sent(DETAIL)).toHaveLength(before + 1);
     expect(title).toHaveValue('고친 제목');
     expect(content).toHaveValue('고친 본문');
+    expect(category).toHaveValue('FREE');
 
     fireEvent.submit(title.closest('form')!);
     await atPath('/posts/9');
-    expect(sent(UPDATE).map((r) => r.body)).toEqual([{ title: '고친 제목', content: '고친 본문' }]);
+    expect(sent(UPDATE).map((r) => r.body)).toEqual([
+      { title: '고친 제목', content: '고친 본문', category: 'FREE' },
+    ]);
   });
 
   it('새 글 화면에 들렀다 기록으로 돌아오면 고칠 글로 다시 채운다 — 새 글에 쓰던 입력이 수정 폼에 남지 않는다', async () => {
@@ -208,5 +218,6 @@ describe('글 수정 — 입력칸을 채우는 때', () => {
     await atPath('/posts/9/edit');
     await waitFor(() => expect(screen.getByLabelText(/^제목/)).toHaveValue('처음 제목'));
     expect(screen.getByLabelText(/^본문/)).toHaveValue('처음 본문');
+    expect(screen.getByLabelText('카테고리')).toHaveValue('QNA');
   });
 });

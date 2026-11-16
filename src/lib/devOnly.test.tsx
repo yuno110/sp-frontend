@@ -59,15 +59,20 @@ const RESPONSES: Record<string, unknown> = {
   '/api/v1/members/me': { accountId: ACCOUNT_ID, nickname: '테스트닉' },
   '/api/v1/accounts/me': { email: 'user@example.com', createdAt: '2026-10-27T10:00:00' },
   '/api/v1/posts': EMPTY_PAGE,
+  // 상세 — 키 집합은 sp-docs/api-contract.md §4.3 이다. 이 화면은 로그인한 채 연다(`liked` 가 boolean 이다).
   '/api/v1/posts/1': {
     id: 1,
     title: '첫 글',
+    category: 'FREE',
+    content: '본문',
     writerId: WRITER_ID,
     writerNickname: '작성자',
     viewCount: 3,
     commentCount: 0,
+    likeCount: 0,
+    liked: false,
+    attachments: [],
     createdAt: '2026-10-27T09:00:00',
-    content: '본문',
   },
   '/api/v1/posts/1/comments': EMPTY_PAGE,
 };

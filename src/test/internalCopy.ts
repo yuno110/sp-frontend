@@ -24,7 +24,7 @@ const API_FIELDS = [
   'nickname', 'deleted',
   // board (§4)
   'id', 'postId', 'title', 'writerId', 'writerNickname', 'viewCount', 'commentCount',
-  'sort', 'searchType', 'keyword',
+  'sort', 'searchType', 'keyword', 'category', 'likeCount', 'liked', 'attachments',
   // claim (§6)
   'sub', 'role', 'iss', 'iat', 'exp',
 ];
@@ -117,6 +117,8 @@ export const INTERNAL_COPY: ReadonlyArray<{ name: string; pattern: RegExp; sampl
   },
   { name: '응답 값', pattern: /\b(?:true|false|null)\b/, samples: ['true — 탈퇴한 회원', 'false', 'null'] },
   { name: '역할 상수', pattern: /\b(?:ADMIN|USER)\b/, samples: ['삭제 (ADMIN)', '7 / USER'] },
+  // 카테고리는 화면에 이름(공지·자유·질문)으로 보인다 — 값(sp-docs/api-contract.md §4.1)이 그대로 나오면 잡는다.
+  { name: '카테고리 상수', pattern: /\b(?:NOTICE|FREE|QNA)\b/, samples: ['NOTICE', 'FREE', 'QNA'] },
   {
     name: '토큰',
     pattern: /토큰|\b[Tt]oken\b|\bJWT\b|\bBearer\b/,

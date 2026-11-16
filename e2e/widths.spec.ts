@@ -15,7 +15,8 @@ test('글 목록 — 표가 보이는 폭마다 제목 칸이 넓고, 그보다 
   const main = page.getByRole('main');
   await expect(main.getByRole('link', { name: '짧은 글' }).first()).toBeVisible();
   const table = main.getByRole('table');
-  const list = main.getByRole('list');
+  // 최근 공지 영역도 줄 목록이고 폭과 상관없이 보인다 — 글 목록의 줄 목록은 공지가 아닌 글(짧은 글)을 담은 것이다.
+  const list = main.getByRole('list').filter({ has: page.getByRole('link', { name: '짧은 글' }) });
 
   for (const width of [360, 640, 767, 768, 1024, 1280]) {
     await page.setViewportSize({ width, height: 800 });

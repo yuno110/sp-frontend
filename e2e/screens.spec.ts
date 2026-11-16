@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import { matchRoutes } from 'react-router-dom';
 import {
+  ADMIN,
   COMMENTS,
   CONFIRM_EMAIL,
   EMAIL,
@@ -9,14 +10,18 @@ import {
   MY_PROFILE_WITHDRAWN,
   NICKNAME,
   NO_CONTENT,
+  OTHER_POST,
+  POST,
   RESEND_VERIFICATION,
   TITLE,
   VERIFY_LINK,
   WITHDRAWN_ID,
+  categoryOf,
   fail,
   ok,
   pageOf,
   type Routes,
+  type Who,
 } from './api.ts';
 import { brokenWords, horizontalOverflow, seriousAxe } from './checks.ts';
 import { expect, test } from './fixtures.ts';
@@ -39,7 +44,8 @@ interface Screen {
   route: RoutePattern;
   state: string;
   path: string;
-  login?: boolean;
+  /** 로그인한 상태로 연다. `true` 면 기본 계정(USER)이다. */
+  login?: true | Who;
   api?: Routes;
   /** 연 뒤 이 상태로 만드는 조작. */
   act?: (page: Page) => Promise<void>;
@@ -226,7 +232,40 @@ const SCREENS: Screen[] = [
     },
   },
 
-  { route: '/posts', state: '목록', path: '/posts', ready: (p) => shown(p, '짧은 글') },
+  {
+    route: '/posts',
+    state: '목록',
+    path: '/posts',
+    ready: async (p) => {
+      await shown(p, '짧은 글');
+      await expect(panel(p, '최근 공지')).toBeVisible();
+    },
+  },
+  {
+    route: '/posts',
+    state: '카테고리 탭을 고름 — 고정 영역이 없다',
+    path: '/posts',
+    act: (p) => main(p).getByRole('group', { name: '카테고리' }).getByRole('button', { name: '질문' }).click(),
+    ready: async (p) => {
+      await expect(main(p).getByRole('button', { name: '질문', pressed: true })).toBeVisible();
+      // 질문이 아닌 글이 사라졌다 — 그 탭의 답이 그려졌다.
+      await expect(main(p).getByText(TITLE, { exact: true })).toHaveCount(0);
+      await shown(p, '짧은 글');
+      await expect(panel(p, '최근 공지')).toHaveCount(0);
+    },
+  },
+  {
+    route: '/posts',
+    state: '고정 영역을 받지 못함',
+    path: '/posts',
+    api: {
+      'GET /api/v1/posts': (request) => (categoryOf(request) === 'NOTICE' ? fail('C005') : ok(pageOf([POST, OTHER_POST]))),
+    },
+    ready: async (p) => {
+      await expect(panel(p, '최근 공지').locator('[data-error-code="C005"]')).toBeVisible();
+      await shown(p, '짧은 글');
+    },
+  },
   {
     route: '/posts',
     state: '세션을 되살리지 못하면 그 자리에서 알린다',
@@ -319,6 +358,28 @@ const SCREENS: Screen[] = [
       await expect(main(p).getByRole('link', { name: '새 계정 만들기' })).toBeVisible();
       await expect(main(p).getByRole('link', { name: '프로필 등록하기' })).toHaveCount(0);
     },
+  },
+  {
+    route: '/posts/new',
+    state: '관리자의 작성 폼 — 공지를 고름',
+    path: '/posts/new',
+    login: ADMIN,
+    act: async (p) => {
+      await main(p).getByLabel('카테고리').selectOption({ label: '공지' });
+    },
+    ready: (p) => expect(main(p).getByLabel('카테고리')).toHaveValue('NOTICE'),
+  },
+  {
+    route: '/posts/new',
+    state: '공지 권한 없음',
+    path: '/posts/new',
+    login: ADMIN,
+    api: { 'POST /api/v1/posts': fail('P003') },
+    act: async (p) => {
+      await main(p).getByLabel('카테고리').selectOption({ label: '공지' });
+      await main(p).getByRole('button', { name: '등록' }).click();
+    },
+    ready: (p) => codeShown(p, 'P003'),
   },
 
   { route: '/posts/:id', state: '상세', path: '/posts/1', ready: (p) => shown(p, COMMENTS[1].content) },
@@ -454,7 +515,7 @@ test('상태마다 연 주소가 그 라우트에 걸린다', () => {
 
 for (const screen of SCREENS) {
   test(`${screen.route} — ${screen.state}`, async ({ page, api }) => {
-    if (screen.login) await api.login();
+    if (screen.login) await api.login(screen.login === true ? undefined : screen.login);
     api.use(screen.api ?? {});
     await page.goto(screen.path);
     await screen.act?.(page);

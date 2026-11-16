@@ -70,7 +70,7 @@ type Handler = (config: InternalAxiosRequestConfig) => unknown;
 
 /** `METHOD 경로` → 응답 본문. 정해 두지 않은 요청은 조용히 넘기지 않는다. */
 let routes: Record<string, Handler> = {};
-const requests: Array<{ key: string; auth: unknown; body: unknown }> = [];
+const requests: Array<{ key: string; auth: unknown; body: unknown; params: unknown }> = [];
 const REISSUE = 'POST /api/v1/auth/reissue';
 const reissues = () => requests.filter((r) => r.key === REISSUE);
 
@@ -80,6 +80,7 @@ async function adapter(config: InternalAxiosRequestConfig): Promise<AxiosRespons
     key,
     auth: config.headers?.Authorization ?? null,
     body: typeof config.data === 'string' ? JSON.parse(config.data) : null,
+    params: config.params ?? null,
   });
   const handler = routes[key];
   if (!handler) throw new Error(`스텁에 없는 요청: ${key}`);
@@ -1702,12 +1703,33 @@ describe('세션과 쿼리 캐시', () => {
   const bearer = (tag: string) => `Bearer ${accessToken(tag)}`;
   const from = (config: InternalAxiosRequestConfig, tag: string) => config.headers.Authorization === bearer(tag);
   const sentBy = (key: string) => requests.filter((r) => r.key === key).map((r) => r.auth);
+  /**
+   * 글 목록 화면은 목록과 최근 공지를 같은 경로로 따로 묻는다(F-12) — `category` 로 가른다. 공지만 묻는 쪽이 최근 공지다. 둘 다 같은
+   * 캐시 규칙을 따르므로 단언은 둘에 같은 기대를 건다.
+   */
+  const listsBy = (category: string | null) =>
+    requests
+      .filter((r) => r.key === LIST && ((r.params as { category?: string } | null)?.category ?? null) === category)
+      .map((r) => r.auth);
   const header = () => document.querySelector('header')!;
   const NICK_A = { accountId: 7, nickname: 'NICK-A' };
   const NICK_B = { accountId: 8, nickname: 'NICK-B' };
-  const pageOf = (title: string) => ({
+  /** 글 한 건의 페이지. 요청이 카테고리로 걸렀으면 그 카테고리의 글이다(sp-docs/api-contract.md §4.1) — 최근 공지는 공지를 받는다. */
+  const pageOf = (title: string, config?: InternalAxiosRequestConfig) => ({
     ...EMPTY_PAGE,
-    content: [{ id: 1, title, writerId: 7, writerNickname: '작성자', viewCount: 0, commentCount: 0, createdAt: '2026-10-27T10:00:00' }],
+    content: [
+      {
+        id: 1,
+        title,
+        category: (config?.params as { category?: string } | undefined)?.category ?? 'FREE',
+        writerId: 7,
+        writerNickname: '작성자',
+        viewCount: 0,
+        commentCount: 0,
+        likeCount: 0,
+        createdAt: '2026-10-27T10:00:00',
+      },
+    ],
     totalElements: 1,
     totalPages: 1,
   });
@@ -1996,9 +2018,9 @@ describe('세션과 쿼리 캐시', () => {
     const listB = deferred();
     routes = {
       [LIST]: async (config) => {
-        if (config.headers.Authorization === undefined) return ok(pageOf('토큰 없이 받은 글'));
+        if (config.headers.Authorization === undefined) return ok(pageOf('토큰 없이 받은 글', config));
         await listB.promise;
-        return ok(pageOf('로그인하고 받은 글'));
+        return ok(pageOf('로그인하고 받은 글', config));
       },
       [ME]: () => ok(NICK_B),
       [LOGIN]: () => ok(tokens('B')),
@@ -2008,7 +2030,10 @@ describe('세션과 쿼리 캐시', () => {
 
     fireEvent.click(within(header()).getByRole('link', { name: '로그인' }));
     await submitLogin();
-    await waitFor(() => expect(sentBy(LIST)).toEqual([null, bearer('B')]));
+    await waitFor(() => {
+      expect(listsBy(null)).toEqual([null, bearer('B')]);
+      expect(listsBy('NOTICE')).toEqual([null, bearer('B')]);
+    });
 
     expect(screen.queryAllByText('토큰 없이 받은 글')).toEqual([]);
     expect(holds(await cachedStates(), '토큰 없이 받은 글')).toBe(false);
@@ -2021,7 +2046,7 @@ describe('세션과 쿼리 캐시', () => {
     await loggedInOnPreviousPage();
     const reply = deferred();
     routes = {
-      [LIST]: () => ok(pageOf('공개 글')),
+      [LIST]: (config) => ok(pageOf('공개 글', config)),
       [REISSUE]: async (config) => {
         await reply.promise;
         return fail(config, 401, 'A002');
@@ -2034,7 +2059,8 @@ describe('세션과 쿼리 캐시', () => {
     await within(header()).findByRole('link', { name: '가입' });
     await settle();
 
-    expect(sentBy(LIST)).toEqual([null]);
+    expect(listsBy(null)).toEqual([null]);
+    expect(listsBy('NOTICE')).toEqual([null]);
     expect(screen.getAllByText('공개 글').length).toBeGreaterThan(0);
   });
 
@@ -2042,9 +2068,9 @@ describe('세션과 쿼리 캐시', () => {
     await loggedInOnPreviousPage();
     const list = deferred();
     routes = {
-      [LIST]: async () => {
+      [LIST]: async (config) => {
         await list.promise;
-        return ok(pageOf('공개 글'));
+        return ok(pageOf('공개 글', config));
       },
       [REISSUE]: (config) => fail(config, 401, 'A002'),
     };
@@ -2054,7 +2080,8 @@ describe('세션과 쿼리 캐시', () => {
     list.resolve();
     await screen.findAllByText('공개 글');
 
-    expect(sentBy(LIST)).toEqual([null]);
+    expect(listsBy(null)).toEqual([null]);
+    expect(listsBy('NOTICE')).toEqual([null]);
   });
 
   it('재발급만으로는 — 같은 세션이다. 캐시가 그대로이고 다시 묻지 않고 쓰던 입력이 그대로다', async () => {
@@ -2102,7 +2129,10 @@ describe('세션과 쿼리 캐시', () => {
     fireEvent.change(keyword, { target: { value: '찾던 말' } });
 
     act(() => useAuthStore.getState().clear());
-    await waitFor(() => expect(sentBy(LIST)).toEqual([bearer('1'), null]));
+    await waitFor(() => {
+      expect(listsBy(null)).toEqual([bearer('1'), null]);
+      expect(listsBy('NOTICE')).toEqual([bearer('1'), null]);
+    });
     await screen.findByText('등록된 게시글이 없습니다');
 
     expect(screen.getByLabelText('검색어')).toBe(keyword);

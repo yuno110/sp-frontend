@@ -2,14 +2,23 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { createPost, getPost, updatePost } from '@/features/board/api';
-import { POST_CONTENT_MAX, TITLE_MAX } from '@/features/board/types';
+import {
+  CATEGORY_LABEL,
+  POST_CONTENT_MAX,
+  TITLE_MAX,
+  type PostCategory,
+} from '@/features/board/types';
 import { useNoProfileMeanings } from '@/features/member/useNoProfileMeanings';
 import { fieldMessages } from '@/lib/api/client';
 import { useMounted } from '@/lib/useMounted';
-import { Button, Empty, ErrorBox, Field, Input, Panel, Textarea } from '@/components/ui';
+import { useAuthStore } from '@/stores/authStore';
+import { Button, Empty, ErrorBox, Field, Input, Panel, Select, Textarea } from '@/components/ui';
 
 /** 입력칸 옆에 오류를 그리는 필드. 나머지 필드의 오류는 요약에 남는다. */
-const INLINE_FIELDS = ['title', 'content'];
+const INLINE_FIELDS = ['category', 'title', 'content'];
+
+/** 새 글의 카테고리 — 고르지 않으면 서버도 이것이다(sp-docs/requirements/board.md §8). */
+const DEFAULT_CATEGORY: PostCategory = 'FREE';
 
 /**
  * 글 작성·수정.
@@ -23,10 +32,14 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
   const postId = id ?? '';
   const navigate = useNavigate();
   const mounted = useMounted();
+  const role = useAuthStore((s) => s.role);
+  const [category, setCategory] = useState<PostCategory>(DEFAULT_CATEGORY);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   /** 입력칸을 채운 글의 id. */
   const [filledFor, setFilledFor] = useState<string | null>(null);
+  /** 고칠 글을 받았을 때의 카테고리. */
+  const [filledCategory, setFilledCategory] = useState<PostCategory | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const errorMeanings = useNoProfileMeanings(error);
@@ -44,10 +57,19 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
   const received = existing.isFetchedAfterMount && existing.isSuccess ? existing.data : undefined;
   useEffect(() => {
     if (!received || filledFor === postId) return;
+    setCategory(received.category);
+    setFilledCategory(received.category);
     setTitle(received.title);
     setContent(received.content);
     setFilledFor(postId);
   }, [received, filledFor, postId]);
+
+  // 공지 선택지는 토큰의 role 이 ADMIN 일 때만 그린다 — 판정은 서버의 403 P003 이고 그 답은 이 폼의 오류 상자(`ErrorBox`)에 보인다.
+  // 고치는 글이 지금 공지면 ADMIN 이 아니어도 그 값을 남긴다 — 지금 값을 그대로 보내는 수정은 공지 판정을 거치지 않는다
+  // (sp-docs/requirements/board.md §8).
+  const choices = (Object.keys(CATEGORY_LABEL) as PostCategory[]).filter(
+    (choice) => choice !== 'NOTICE' || role === 'ADMIN' || filledCategory === 'NOTICE',
+  );
 
   const submit = async () => {
     setBusy(true);
@@ -55,8 +77,8 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
     try {
       const saved =
         mode === 'create'
-          ? await createPost(title, content)
-          : await updatePost(postId, title, content);
+          ? await createPost(title, content, category)
+          : await updatePost(postId, title, content, category);
       if (mounted.current) navigate(`/posts/${saved.id}`);
     } catch (e) {
       setError(e);
@@ -93,6 +115,19 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
           void submit();
         }}
       >
+        <Field label="카테고리" errors={fieldMessages(error, 'category')}>
+          <Select
+            value={category}
+            onChange={(e) => setCategory(e.target.value as PostCategory)}
+            className="sm:w-48"
+          >
+            {choices.map((choice) => (
+              <option key={choice} value={choice}>
+                {CATEGORY_LABEL[choice]}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field
           label="제목"
           hint={`${title.length} / ${TITLE_MAX} · 공백만으로 채울 수 없습니다`}

@@ -6,23 +6,41 @@
  * 이 프로젝트에는 게시판이 하나이고 글·댓글만 있다.
  */
 
-/** 목록 항목 — 일곱 키. `content` 가 없다(§4.3, 본문 10,000자 × 50건 때문이다). */
+/**
+ * 카테고리 — 값은 sp-docs/requirements/board.md §8 이 정한다. 공지(`NOTICE`)는 ADMIN 만 쓰고, 그 판정은 서버의 403 `P003` 이다 —
+ * 화면이 공지 선택지를 가리는 것은 편의다.
+ */
+export type PostCategory = 'NOTICE' | 'FREE' | 'QNA';
+
+/** 화면에 보이는 이름. 선언 순서가 탭과 선택지의 순서다. */
+export const CATEGORY_LABEL: Record<PostCategory, string> = {
+  NOTICE: '공지',
+  FREE: '자유',
+  QNA: '질문',
+};
+
+/** 목록 항목 — 키는 §4.3 의 목록 항목 줄이다. `content` 가 없다(본문 10,000자 × 50건 때문이다). */
 export interface PostListItem {
   id: number;
   title: string;
+  category: PostCategory;
   writerId: number;
   writerNickname: string;
   viewCount: number;
   commentCount: number;
+  likeCount: number;
   createdAt: string;
 }
 
-/** 상세 — 목록의 일곱에 `content` 를 더한 것. 쓰기 응답도 같은 모양이다(§4.4). */
+/**
+ * 상세 — 목록 항목의 키에 `content` 를 더한 것. 쓰기 응답도 같은 모양이다(§4.4). §4.3 의 상세 키 가운데 `liked`·`attachments` 는 이
+ * 화면이 읽지 않으므로 두지 않는다.
+ */
 export interface PostDetail extends PostListItem {
   content: string;
 }
 
-/** 댓글 — 다섯 키 하나뿐이다. 목록·작성·수정이 같은 모양이다(§4.5). */
+/** 댓글 — 목록·작성·수정이 같은 모양이다(§4.5). */
 export interface Comment {
   id: number;
   writerId: number;
