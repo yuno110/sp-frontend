@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Layout, type RouteHandle } from '@/components/Layout';
 import { LoginPage } from '@/pages/LoginPage';
 import { SignupPage, SignupProfilePage } from '@/pages/SignupPage';
+import { ResendVerificationPage, VerifyEmailPage } from '@/pages/VerifyEmailPage';
 import { PostListPage } from '@/pages/PostListPage';
 import { PostDetailPage } from '@/pages/PostDetailPage';
 import { PostFormPage } from '@/pages/PostFormPage';
@@ -58,6 +59,10 @@ export const router = createBrowserRouter([
           </RequireToken>
         ),
       },
+      // 메일의 링크가 여는 화면이다 — 경로는 링크의 모양(`{FRONTEND_BASE_URL}/verify-email#token=…`)과 같아야 한다
+      // (sp-docs/requirements/member.md §11.5). 둘 다 무인증 요청이라 공개 경로다.
+      { path: 'verify-email', element: <VerifyEmailPage />, handle: PUBLIC_SCREEN },
+      { path: 'verify-email/resend', element: <ResendVerificationPage />, handle: PUBLIC_SCREEN },
       {
         path: 'posts/mine',
         element: (

@@ -4,7 +4,7 @@
  */
 
 /** 복구 동작. 화면이 그곳으로 가는 링크를 붙인다(components/ui.tsx). */
-export type Recovery = 'profile' | 'login' | 'signup';
+export type Recovery = 'profile' | 'login' | 'signup' | 'resendVerification';
 
 export interface Sentence {
   text: string;
@@ -62,7 +62,10 @@ export const ERROR_SENTENCES: Record<string, Sentence> = {
   // 잠금은 비밀번호가 맞든 틀리든, 계정이 있든 없든 같은 응답이다(§8.4) — 문장도 그것을 말하지 않는다. 잠금 시간도 적지
   // 않는다 — 값이 바뀌면 문장이 거짓이 된다(같은 절).
   AU005: { text: '로그인 시도가 많아 지금은 로그인할 수 없습니다. 잠시 후 다시 시도해 주세요.' },
-  AU006: { text: '이메일 인증을 마쳐야 로그인할 수 있습니다.' },
+  // 비밀번호가 맞은 미인증 계정이다(§8.4) — 로그인만 낸다. 메일을 잃었거나 링크가 만료됐을 수 있으므로 인증 메일을 다시 받는 화면으로
+  // 안내한다(F-08).
+  AU006: { text: '이메일 인증을 마쳐야 로그인할 수 있습니다.', recovery: 'resendVerification' },
+  // 기본 뜻에는 안내가 없다. 인증 확인 화면은 아래 `EMAIL_VERIFICATION` 을 넘긴다.
   AU007: { text: '링크가 유효하지 않거나 만료되었습니다.' },
 };
 
@@ -104,6 +107,15 @@ export const WITHDRAWN_PROFILE: Meanings = { M001: WITHDRAWN, S002: WITHDRAWN };
  */
 export const AFTER_WITHDRAWAL: Meanings = {
   A003: { text: '로그인이 만료되었습니다.' },
+};
+
+/**
+ * `POST /api/v1/accounts/email-verification/confirm` — 400 `AU007` 은 링크가 없다·만료됐다·이미 쓰였다·그 계정이 탈퇴했다를 가르지 않는다
+ * (api-contract.md §2.4). 이미 쓴 링크를 다시 연 사람은 인증을 마친 사람일 수 있으므로 「이미 인증했다면 로그인하라」 를 함께 보이고
+ * (requirements/member.md §11.2) 로그인으로 안내한다. 인증 화면(pages/VerifyEmailPage.tsx)이 넘긴다.
+ */
+export const EMAIL_VERIFICATION: Meanings = {
+  AU007: { text: '링크가 유효하지 않거나 만료되었습니다. 이미 인증했다면 로그인해 주세요.', recovery: 'login' },
 };
 
 /** 응답이 아예 없는 실패 — 연결 거부·CORS 거부·타임아웃. 업무 오류와 다른 문장이다. */

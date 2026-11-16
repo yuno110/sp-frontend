@@ -1,4 +1,4 @@
-import type { Page, Response } from '@playwright/test';
+import type { Page, Request, Response } from '@playwright/test';
 import { allowed, expect, test, type Traffic } from './fixtures.ts';
 
 /**
@@ -9,8 +9,11 @@ import { allowed, expect, test, type Traffic } from './fixtures.ts';
  * 시작하고 실행마다 다르므로 같은 스위트를 다시 돌릴 수 있다. 남는 행(탈퇴한 계정·프로필, 지운 글·댓글, 중간에 실패한 흐름의
  * 계정)은 그 접두어로 찾아 사람이 정리한다(README 「e2e 가 남긴 데이터」).
  *
+ * 가입은 인증 메일의 링크로 인증한 뒤에 로그인한다(F-08). 메일은 Mailpit 이 받는다 — auth 의 `local` 메일 설정이 가리키는 그
+ * Mailpit 이 떠 있어야 한다(README 「실제 서비스와의 e2e」).
+ *
  * 입력칸은 라벨 이름으로, 버튼과 링크는 보이는 이름으로 찾는다. 화면을 옮기는 것은 링크와 버튼이다 — 주소창(`page.goto`)은
- * 흐름의 첫 화면, 새로고침, 주소를 직접 여는 경우에만 쓴다.
+ * 흐름의 첫 화면, 새로고침, 주소를 직접 여는 경우(메일의 링크를 여는 것도 그렇다)에만 쓴다.
  */
 
 /** e2e 가 만든 계정의 이메일 접두어. README 의 정리 절차가 이것으로 찾는다 — 바꾸면 그 절차도 고친다. */
@@ -72,18 +75,116 @@ async function expectLoggedOut(page: Page) {
 const listShown = (page: Page) =>
   expect(main(page).getByRole('table').or(main(page).getByText('등록된 게시글이 없습니다', { exact: true }))).toBeVisible();
 
-/** 가입 — 사용자가 내는 것은 계정 정보와 닉네임이다(sp-docs/plan/phase2.md §7.1). 목록이 다 그려지면 끝난다. */
-async function signUp(page: Page, account: Account = newAccount()): Promise<Account> {
+/** Mailpit 의 웹 API — 로컬의 SMTP 가 받은 메일을 읽는다(sp-docs/tech-stack.md §4.7.1 의 기본 주소). */
+const MAILPIT = 'http://localhost:8025';
+const CONFIRM = 'POST /api/v1/accounts/email-verification/confirm';
+
+/** Mailpit 검색 결과의 메일 하나 — 쓰는 키만 둔다. */
+interface MailSummary {
+  ID: string;
+  To: Array<{ Address: string }>;
+  Created: string;
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * 그 이메일로 온 인증 메일 가운데 가장 최근 것의 링크. **그 흐름의 이메일로 받은 것만 읽는다** — 이메일은 흐름마다 다르다. 메일은
+ * 계정 생성·재발송이 커밋된 뒤 따로 나가므로 `count` 통이 닿을 때까지 묻는다. 재발송하면 앞 메일의 링크는 죽는다
+ * (sp-docs/requirements/member.md §11.1).
+ *
+ * Mailpit 은 화면이 아니라 이 테스트가 부른다(`page.request`) — 화면의 요청이 아니므로 `Traffic` 에 섞이지 않는다. 링크는 이 화면의
+ * 오리진과 인증 경로로 시작해야 한다 — 화면의 인증 경로가 메일의 링크 모양(`{FRONTEND_BASE_URL}/verify-email#token=…`,
+ * sp-docs/requirements/member.md §11.5)과 맞는지 여기서 본다.
+ */
+async function verificationLink(page: Page, email: string, count: number): Promise<string> {
+  let found: MailSummary[] = [];
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(`${MAILPIT}/api/v1/search`, { params: { query: `to:"${email}"` } });
+        if (!response.ok()) return `Mailpit 검색 ${response.status()}`;
+        const { messages } = (await response.json()) as { messages: MailSummary[] };
+        found = messages.filter((m) => m.To.some((to) => to.Address.toLowerCase() === email.toLowerCase()));
+        return found.length;
+      },
+      { message: `${email} 로 온 메일 — Mailpit 이 ${MAILPIT} 에 떠 있고 auth 의 메일 설정이 그것을 가리키는가`, timeout: 20_000 },
+    )
+    .toBe(count);
+  const newest = found.reduce((a, b) => (Date.parse(b.Created) > Date.parse(a.Created) ? b : a));
+  const message = await page.request.get(`${MAILPIT}/api/v1/message/${newest.ID}`);
+  expect(message.ok(), 'Mailpit 의 메일 본문').toBe(true);
+  const { Text } = (await message.json()) as { Text: string };
+  const origin = new URL(page.url()).origin;
+  const shape = new RegExp(`^${escapeRegExp(origin)}/verify-email#token=[A-Za-z0-9_-]+$`);
+  const link = Text.split(/\s+/).find((word) => shape.test(word));
+  // 토큰은 그 계정의 자격이다 — 실패 메시지에는 가린 본문을 싣는다.
+  expect(link, `메일의 링크가 ${origin}/verify-email#token=… 꼴이다 — 본문: ${Text.replace(/token=\S+/g, 'token=…')}`).toBeDefined();
+  return link as string;
+}
+
+/** 계정을 만든다 — 화면은 로그인하지 않고 메일을 확인하라고 한다(F-08). */
+async function createAccount(page: Page, account: Account) {
   await page.goto('/signup');
   await main(page).getByLabel('이메일', { exact: true }).fill(account.email);
   await main(page).getByLabel('비밀번호', { exact: true }).fill(PASSWORD);
   await main(page).getByRole('button', { name: '계정 만들기', exact: true }).click();
+  await expect(main(page).getByRole('heading', { name: '메일을 확인하세요', exact: true })).toBeVisible();
+}
+
+/**
+ * 메일의 링크를 열어 인증한다. 화면은 주소창에서 토큰을 지우고, 확인을 누르기 전에는 확인 요청을 보내지 않는다
+ * (sp-docs/security.md §12). 인증을 마치면 화면이 로그인으로 안내한다 — 확인은 토큰을 주지 않는다.
+ */
+async function verifyByMail(page: Page, email: string, count = 1) {
+  const link = await verificationLink(page, email, count);
+  const confirms: string[] = [];
+  const onRequest = (request: Request) => {
+    if (`${request.method()} ${new URL(request.url()).pathname}` === CONFIRM) confirms.push(request.url());
+  };
+  page.on('request', onRequest);
+  try {
+    await page.goto(link);
+    const button = main(page).getByRole('button', { name: '이메일 인증하기', exact: true });
+    await expect(button).toBeVisible();
+    await expect.poll(() => new URL(page.url()).hash, '주소창의 fragment').toBe('');
+    expect(confirms, '누르기 전의 확인 요청').toEqual([]);
+    await button.click();
+    await expect(main(page).getByText('이메일 인증을 마쳤습니다.', { exact: true })).toBeVisible();
+    expect(confirms).toHaveLength(1);
+  } finally {
+    page.off('request', onRequest);
+  }
+}
+
+/** 인증한 뒤 처음 로그인한다 — 인증 화면의 로그인 안내에서. 프로필이 없으므로 화면이 프로필 등록으로 보낸다. */
+async function firstLogin(page: Page, account: Account) {
+  await main(page).getByRole('link', { name: '로그인하기', exact: true }).click();
+  await at(page, '/login');
+  await main(page).getByLabel('이메일', { exact: true }).fill(account.email);
+  await main(page).getByLabel('비밀번호', { exact: true }).fill(PASSWORD);
+  await main(page).getByRole('button', { name: '로그인', exact: true }).click();
   await at(page, '/signup/profile');
+}
+
+/** 프로필을 등록한다. 목록이 다 그려지면 끝난다. */
+async function registerProfile(page: Page, account: Account) {
   await main(page).getByLabel('닉네임', { exact: true }).fill(account.nickname);
   await main(page).getByRole('button', { name: '프로필 등록', exact: true }).click();
   await at(page, '/posts');
   await expectLoggedIn(page, account.nickname);
   await listShown(page);
+}
+
+/**
+ * 가입 — 계정을 만들고, 그 이메일로 온 메일의 링크로 인증하고, 로그인해 프로필을 등록한다(sp-docs/requirements/member.md §4).
+ * 목록이 다 그려지면 끝난다.
+ */
+async function signUp(page: Page, account: Account = newAccount()): Promise<Account> {
+  await createAccount(page, account);
+  await verifyByMail(page, account.email);
+  await firstLogin(page, account);
+  await registerProfile(page, account);
   return account;
 }
 
@@ -150,12 +251,13 @@ async function removeMyPost(page: Page, title: string) {
   await at(page, '/posts');
 }
 
-test('가입 — 한 흐름으로 프로필까지 만들어지고 로그인 상태다', async ({ page, traffic }) => {
+test('가입 — 메일의 링크로 인증하고 로그인해 프로필까지 만들어지고 로그인 상태다', async ({ page, traffic }) => {
   const account = await signUp(page);
 
-  // 사용자가 낸 것은 두 번이고, 화면이 계정 → 로그인 → 프로필 순서로 불렀다(sp-docs/api-contract.md §9.1).
+  // 계정 → 인증 → 로그인 → 프로필 순서다(sp-docs/api-contract.md §9.1·§9.10). 계정을 만든 화면은 로그인하지 않았다.
   expect(traffic.answered.filter((a) => a.key.startsWith('POST '))).toEqual([
     { key: 'POST /api/v1/accounts', status: 201 },
+    { key: CONFIRM, status: 204 },
     { key: 'POST /api/v1/auth/login', status: 200 },
     { key: 'POST /api/v1/members', status: 201 },
   ]);
@@ -165,6 +267,39 @@ test('가입 — 한 흐름으로 프로필까지 만들어지고 로그인 상�
   await expect(panel(page, '계정').getByText(account.email, { exact: true })).toBeVisible();
   await expect(panel(page, '프로필').getByText(account.nickname, { exact: true })).toBeVisible();
 
+  await withdraw(page);
+});
+
+test('인증 전 로그인 — 인증 메일을 다시 받는 길을 안내한다. 다시 받은 메일의 링크로 인증하면 로그인된다', async ({ page, traffic }) => {
+  const account = newAccount();
+  await createAccount(page, account);
+
+  // 인증하기 전에 로그인한다 — 비밀번호가 맞아도 403 AU006 이다(sp-docs/api-contract.md §2.1).
+  await banner(page).getByRole('link', { name: '로그인', exact: true }).click();
+  await at(page, '/login');
+  await main(page).getByLabel('이메일', { exact: true }).fill(account.email);
+  await main(page).getByLabel('비밀번호', { exact: true }).fill(PASSWORD);
+  await main(page).getByRole('button', { name: '로그인', exact: true }).click();
+  await expect(page.locator('[data-error-code="AU006"]')).toBeVisible();
+  await expect(main(page).getByText('이메일 인증을 마쳐야 로그인할 수 있습니다.', { exact: true })).toBeVisible();
+  await expectLoggedOut(page);
+  expect(traffic.answered.filter((a) => a.key === 'POST /api/v1/auth/login')).toEqual([
+    { key: 'POST /api/v1/auth/login', status: 403 },
+  ]);
+
+  // 안내를 따라 인증 메일을 다시 받는다 — 앞 메일의 링크는 죽고 새 메일의 링크만 산다(sp-docs/requirements/member.md §11.1).
+  await main(page).getByRole('link', { name: '인증 메일 다시 받기', exact: true }).click();
+  await at(page, '/verify-email/resend');
+  await main(page).getByLabel('이메일', { exact: true }).fill(account.email);
+  await main(page).getByRole('button', { name: '인증 메일 보내기', exact: true }).click();
+  await expect(main(page).getByText('요청을 받았습니다.', { exact: false })).toBeVisible();
+  expect(traffic.answered.filter((a) => a.key === 'POST /api/v1/accounts/email-verification')).toEqual([
+    { key: 'POST /api/v1/accounts/email-verification', status: 202 },
+  ]);
+
+  await verifyByMail(page, account.email, 2);
+  await firstLogin(page, account);
+  await registerProfile(page, account);
   await withdraw(page);
 });
 

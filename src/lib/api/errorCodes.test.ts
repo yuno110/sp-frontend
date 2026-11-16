@@ -3,6 +3,7 @@ import { internalCopyIn } from '@/test/internalCopy';
 import { plainEndingsIn } from '@/test/plainEnding';
 import {
   AFTER_WITHDRAWAL,
+  EMAIL_VERIFICATION,
   ERROR_CODES,
   ERROR_SENTENCES,
   MY_PROFILE,
@@ -46,7 +47,12 @@ describe('코드 사전', () => {
 
   it('엔드포인트별 뜻은 §8 의 코드에만 붙는다', () => {
     expect(CONTRACT_CODES).toEqual(
-      expect.arrayContaining([...Object.keys(MY_PROFILE), ...Object.keys(WITHDRAWN_PROFILE), ...Object.keys(AFTER_WITHDRAWAL)]),
+      expect.arrayContaining([
+        ...Object.keys(MY_PROFILE),
+        ...Object.keys(WITHDRAWN_PROFILE),
+        ...Object.keys(AFTER_WITHDRAWAL),
+        ...Object.keys(EMAIL_VERIFICATION),
+      ]),
     );
   });
 });
@@ -57,6 +63,7 @@ describe('사용자 문장', () => {
     ...Object.entries(MY_PROFILE).map(([code, s]) => [`${code} (내 프로필)`, s.text] as const),
     ...Object.entries(WITHDRAWN_PROFILE).map(([code, s]) => [`${code} (탈퇴한 프로필)`, s.text] as const),
     ...Object.entries(AFTER_WITHDRAWAL).map(([code, s]) => [`${code} (계정 탈퇴 뒤)`, s.text] as const),
+    ...Object.entries(EMAIL_VERIFICATION).map(([code, s]) => [`${code} (이메일 인증 확인)`, s.text] as const),
     ['응답 없음', NO_RESPONSE] as const,
     ['오류 응답이 아닌 실패', UNEXPECTED] as const,
   ];
@@ -98,10 +105,20 @@ describe('복구 동작', () => {
     expect(ERROR_SENTENCES.S001.text).toContain('잠시 후 다시 시도');
   });
 
+  it('AU006 — 인증 메일을 다시 받는 화면으로. 로그인만 내는 코드다', () => {
+    expect(ERROR_SENTENCES.AU006.recovery).toBe('resendVerification');
+  });
+
+  it('AU007 — 인증 확인에서는 「이미 인증했다면 로그인하라」 와 로그인으로. 기본 뜻에는 안내가 없다', () => {
+    expect(EMAIL_VERIFICATION.AU007.text).toContain('이미 인증했다면 로그인해 주세요');
+    expect(EMAIL_VERIFICATION.AU007.recovery).toBe('login');
+    expect(ERROR_SENTENCES.AU007.recovery).toBeUndefined();
+  });
+
   it('복구 동작은 위 코드에만 있다 — 나머지 코드가 엉뚱한 곳으로 보내지 않는다', () => {
     const withRecovery = Object.entries(ERROR_SENTENCES)
       .filter(([, s]) => s.recovery)
       .map(([code]) => code);
-    expect(sorted(withRecovery)).toEqual(['A001', 'A002', 'A003', 'M007', 'S002']);
+    expect(sorted(withRecovery)).toEqual(['A001', 'A002', 'A003', 'AU006', 'M007', 'S002']);
   });
 });

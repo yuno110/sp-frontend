@@ -2,13 +2,16 @@ import type { Page } from '@playwright/test';
 import { matchRoutes } from 'react-router-dom';
 import {
   COMMENTS,
+  CONFIRM_EMAIL,
   EMAIL,
   LONG_WORD,
   MY_PROFILE,
   MY_PROFILE_WITHDRAWN,
   NICKNAME,
   NO_CONTENT,
+  RESEND_VERIFICATION,
   TITLE,
+  VERIFY_LINK,
   WITHDRAWN_ID,
   fail,
   ok,
@@ -58,30 +61,8 @@ const SIGNUP_FIELD_ERRORS = [
   { field: 'password', message: '비밀번호는 8~20자의 영문, 숫자, 특수문자 조합이어야 합니다.' },
 ];
 
-/**
- * 계정 생성의 답을 로그아웃에 실패로 답할 때까지 미룬다 — 그 사이에 누른 로그아웃이 가입을 멈추고, 실패해서 가입 화면에 남는다. 이메일은
- * 띄어쓰기 없이 가장 긴 값이다(`EMAIL`) — 안내가 그 이메일을 보인다. 답한 뒤에는 다시 미룬다 — 같은 작업자가 이 상태를 다시 열어도
- * (`--repeat-each`) 로그아웃을 기다린다.
- */
-function stoppedSignup(): Routes {
-  let release!: () => void;
-  let logoutFailed!: Promise<void>;
-  const hold = () => {
-    logoutFailed = new Promise<void>((resolve) => (release = resolve));
-  };
-  hold();
-  return {
-    'POST /api/v1/accounts': async () => {
-      await logoutFailed;
-      hold();
-      return ok({ accountId: 8, email: EMAIL }, 201);
-    },
-    'POST /api/v1/auth/logout': () => {
-      release();
-      return fail('C005');
-    },
-  };
-}
+/** 인증 화면의 확인 버튼 — 링크를 연 것만으로는 확인하지 않는다. */
+const pressVerify = (page: Page) => main(page).getByRole('button', { name: '이메일 인증하기' }).click();
 
 const withdraw = async (page: Page) => {
   const section = panel(page, '탈퇴');
@@ -105,6 +86,21 @@ const SCREENS: Screen[] = [
     },
     ready: (p) => codeShown(p, 'AU003'),
   },
+  {
+    route: '/login',
+    state: '인증 전의 계정',
+    path: '/login',
+    api: { 'POST /api/v1/auth/login': fail('AU006') },
+    act: async (p) => {
+      await main(p).getByLabel(/^이메일/).fill('user@example.com');
+      await main(p).getByLabel(/^비밀번호/).fill('Passw0rd!');
+      await main(p).getByRole('button', { name: '로그인' }).click();
+    },
+    ready: async (p) => {
+      await codeShown(p, 'AU006');
+      await expect(main(p).getByRole('link', { name: '인증 메일 다시 받기' })).toBeVisible();
+    },
+  },
 
   { route: '/signup', state: '입력 전', path: '/signup', ready: (p) => expect(main(p).getByRole('heading', { name: '계정 만들기' })).toBeVisible() },
   {
@@ -127,22 +123,86 @@ const SCREENS: Screen[] = [
     ready: (p) => shown(p, '쓸 수 있는 이메일입니다'),
   },
   {
+    // 이메일은 띄어쓰기 없이 가장 긴 값이다(`EMAIL`) — 안내가 그 이메일을 보인다.
     route: '/signup',
-    state: '계정을 만든 뒤 멈춤 — 기다리는 사이에 누른 로그아웃이 실패',
+    state: '계정을 만듦 — 메일을 확인하세요',
     path: '/signup',
-    login: true,
-    api: stoppedSignup(),
+    api: { 'POST /api/v1/accounts': ok({ accountId: 8, email: EMAIL }, 201) },
     act: async (p) => {
       await main(p).getByLabel(/^이메일/).fill(EMAIL);
       await main(p).getByLabel(/^비밀번호/).fill('Passw0rd!');
       await main(p).getByRole('button', { name: '계정 만들기' }).click();
-      await p.getByRole('banner').getByRole('button', { name: '로그아웃' }).click();
     },
     ready: async (p) => {
-      await expect(p.getByRole('alert').getByText('로그아웃하지 못했습니다.', { exact: false })).toBeVisible();
-      await expect(main(p).getByText(`${EMAIL} 계정을 만들었습니다.`, { exact: false })).toBeVisible();
+      await expect(main(p).getByRole('heading', { name: '메일을 확인하세요' })).toBeVisible();
+      await shown(p, `${EMAIL} 계정을 만들었습니다.`);
+      await expect(main(p).getByRole('link', { name: '인증 메일 다시 받기' })).toBeVisible();
+    },
+  },
+
+  {
+    route: '/verify-email',
+    state: '링크를 연 화면',
+    path: VERIFY_LINK,
+    lands: '/verify-email',
+    ready: (p) => expect(main(p).getByRole('button', { name: '이메일 인증하기' })).toBeVisible(),
+  },
+  {
+    route: '/verify-email',
+    state: '인증을 마침',
+    path: VERIFY_LINK,
+    lands: '/verify-email',
+    api: { [CONFIRM_EMAIL]: NO_CONTENT },
+    act: pressVerify,
+    ready: async (p) => {
+      await shown(p, '이메일 인증을 마쳤습니다.');
       await expect(main(p).getByRole('link', { name: '로그인하기' })).toBeVisible();
     },
+  },
+  {
+    route: '/verify-email',
+    state: '쓸 수 없는 링크',
+    path: VERIFY_LINK,
+    lands: '/verify-email',
+    api: { [CONFIRM_EMAIL]: fail('AU007') },
+    act: pressVerify,
+    ready: async (p) => {
+      await codeShown(p, 'AU007');
+      await expect(main(p).getByRole('link', { name: '로그인하기' })).toBeVisible();
+      await expect(main(p).getByRole('link', { name: '인증 메일 다시 받기' })).toBeVisible();
+    },
+  },
+  {
+    route: '/verify-email',
+    state: '링크에 토큰이 없음',
+    path: '/verify-email',
+    ready: (p) => shown(p, '인증 링크를 찾지 못했습니다. 메일의 링크를 다시 열어 주세요.'),
+  },
+
+  {
+    route: '/verify-email/resend',
+    state: '입력 전',
+    path: '/verify-email/resend',
+    ready: (p) => expect(main(p).getByRole('heading', { name: '인증 메일 다시 받기' })).toBeVisible(),
+  },
+  {
+    route: '/verify-email/resend',
+    state: '요청을 받음',
+    path: '/verify-email/resend',
+    api: { [RESEND_VERIFICATION]: ok(null, 202) },
+    act: async (p) => {
+      await main(p).getByLabel(/^이메일/).fill(EMAIL);
+      await main(p).getByRole('button', { name: '인증 메일 보내기' }).click();
+    },
+    ready: (p) => expect(main(p).getByText('요청을 받았습니다.', { exact: false })).toBeVisible(),
+  },
+  {
+    route: '/verify-email/resend',
+    state: '필드 오류',
+    path: '/verify-email/resend',
+    api: { [RESEND_VERIFICATION]: fail('C001', [SIGNUP_FIELD_ERRORS[0]]) },
+    act: (p) => main(p).getByRole('button', { name: '인증 메일 보내기' }).click(),
+    ready: (p) => shown(p, SIGNUP_FIELD_ERRORS[0].message),
   },
 
   {

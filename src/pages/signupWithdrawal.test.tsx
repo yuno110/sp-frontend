@@ -2,12 +2,20 @@ import { StrictMode, useLayoutEffect } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AFTER_WITHDRAWAL, ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE } from '@/lib/api/errorCodes';
+import {
+  AFTER_WITHDRAWAL,
+  EMAIL_VERIFICATION,
+  ERROR_SENTENCES,
+  MY_PROFILE,
+  NO_RESPONSE,
+  WITHDRAWN_PROFILE,
+} from '@/lib/api/errorCodes';
 import { holds } from '@/test/holds';
 
 /**
- * 가입과 탈퇴를 사용자 흐름으로 합친다 (sp-docs/plan/phase2.md §7.2 F-04). 서버 계약은 그대로다 — 가입은 계정 → 로그인 →
- * 프로필, 탈퇴는 계정 → 프로필이다(api-contract.md §9.1·§9.1.1). **요청 순서는 어댑터가 받은 요청의 기록으로 단언한다.**
+ * 가입과 탈퇴를 사용자 흐름으로 합친다 (sp-docs/plan/phase2.md §7.2 F-04). 서버 계약은 그대로다 — 가입은 계정 → (메일의 링크로
+ * 인증) → 로그인 → 프로필, 탈퇴는 계정 → 프로필이다(api-contract.md §9.1·§9.1.1·§9.10). 계정을 만든 화면은 로그인하지 않는다 — 인증
+ * 전의 로그인은 403 `AU006` 이다(F-08). **요청 순서는 어댑터가 받은 요청의 기록으로 단언한다.**
  *
  * 화면은 프로덕션 모드와 StrictMode 로 그린다 — 흉내는 src/pages/userCopy.test.tsx 와 같다. 요청은 axios 의 기본 어댑터로
  * 받는다. 재발급은 재시도 인터셉터가 없는 별도 인스턴스로 나가므로 인스턴스가 만들어지기 전에 기본값을 바꾼다.
@@ -173,13 +181,22 @@ const beside = (input: Element) => (input as HTMLInputElement).labels![0].parent
 
 /* ───────── 가입 ───────── */
 
+const CONFIRM = 'POST /api/v1/accounts/email-verification/confirm';
+const RESEND = 'POST /api/v1/accounts/email-verification';
+/** 프로필이 탈퇴한 것인지 가르는 공개 조회(api-contract.md §3.1) — 로그인 뒤 내 프로필 조회가 `M001` 일 때 묻는다. */
+const MY_PUBLIC_PROFILE = 'GET /api/v1/members/7';
+
 const SIGNUP: Routes = {
   [CREATE_ACCOUNT]: () => ({ status: 201, body: { success: true, data: { accountId: 7, email: EMAIL }, error: null } }),
   [LOGIN]: () => ok(tokens('L')),
   [CREATE_PROFILE]: () => ({ status: 201, body: { success: true, data: PROFILE, error: null } }),
-  // 프로필 등록 전이다 — 머리글의 조회가 404 M001 이다(api-contract.md §3).
+  // 프로필 등록 전이다 — 머리글의 조회가 404 M001 이고(api-contract.md §3) 공개 조회도 없는 프로필이다(§3.1).
   'GET /api/v1/members/me': () => fail(404, 'M001'),
+  [MY_PUBLIC_PROFILE]: () => fail(404, 'M001'),
 };
+
+/** 계정을 만든 화면의 안내 — 이 말로 끝난다(sp-docs/requirements/member.md §4). */
+const CHECK_MAIL = '메일을 확인하세요';
 
 /** 계정 정보를 낸다 — 사용자의 첫 제출이다. */
 function submitAccount() {
@@ -188,30 +205,109 @@ function submitAccount() {
   fireEvent.submit(main().querySelector('form')!);
 }
 
+/** 로그인 화면의 폼을 낸다 — 인증을 마친 계정의 첫 로그인이다. */
+function submitFirstLogin() {
+  type(screen.getByLabelText(/^이메일/), EMAIL);
+  type(screen.getByLabelText(/^비밀번호/), PASSWORD);
+  fireEvent.submit(main().querySelector('form')!);
+}
+
 describe('가입', () => {
-  it('세 요청 모두 성공 — 사용자는 계정 정보와 닉네임을 내고, 그 사이에 화면이 로그인한다. 로그인 상태로 끝난다', async () => {
-    const { useAuthStore } = await renderApp('/signup', { extra: SIGNUP });
+  it('계정을 만들면 — 로그인하지 않고 「메일을 확인하세요」 와 재발송 안내를 보인다. 비밀번호 입력칸이 내려간다', async () => {
+    // 응답의 email 을 입력과 다르게 준다 — 안내가 입력이 아니라 서버가 돌려준 값을 싣는지 가른다.
+    const serverEmail = `stored-${EMAIL}`;
+    const { useAuthStore } = await renderApp('/signup', {
+      extra: {
+        ...SIGNUP,
+        [CREATE_ACCOUNT]: () => ({ status: 201, body: { success: true, data: { accountId: 7, email: serverEmail }, error: null } }),
+      },
+    });
 
     submitAccount();
-    // 다음 제출은 닉네임이다 — 사이에 사용자가 누를 로그인 단계가 없다.
+
+    await until([CHECK_MAIL, `${serverEmail} 계정을 만들었습니다.`], main);
+    expect(within(main()).getByRole('link', { name: '인증 메일 다시 받기' })).toHaveAttribute('href', '/verify-email/resend');
+    expect(screen.queryByLabelText(/^비밀번호/)).toBeNull();
+    await settled();
+    expect(writes()).toEqual([CREATE_ACCOUNT]);
+    expect(sent(LOGIN)).toEqual([]);
+    expect(pathname()).toBe('/signup');
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionGeneration: 0 });
+  });
+
+  it('인증한 뒤 첫 로그인 — 프로필이 없으면 프로필 등록으로 가고, 닉네임을 내면 로그인 상태로 끝난다', async () => {
+    const { useAuthStore } = await renderApp('/login', { extra: SIGNUP });
+
+    submitFirstLogin();
     const nickname = await screen.findByLabelText(/^닉네임/);
     expect(pathname()).toBe('/signup/profile');
-    expect(writes()).toEqual([CREATE_ACCOUNT, LOGIN]);
+    expect(writes()).toEqual([LOGIN]);
     expect(sent(LOGIN)[0].body).toEqual({ email: EMAIL, password: PASSWORD });
+    // 로그인 화면과 머리글이 내 프로필 조회를 함께 기다렸다 — 한 번 나갔다.
+    expect(sent('GET /api/v1/members/me')).toHaveLength(1);
 
     type(nickname, '새닉');
     fireEvent.submit(nickname.closest('form')!);
     await atPath('/posts');
 
-    expect(writes()).toEqual([CREATE_ACCOUNT, LOGIN, CREATE_PROFILE]);
+    expect(writes()).toEqual([LOGIN, CREATE_PROFILE]);
     expect(sent(CREATE_PROFILE)[0].auth).toBe(`Bearer ${accessToken('L')}`);
     expect(useAuthStore.getState().accessToken).toBe(accessToken('L'));
     expect(within(banner()).getByRole('button', { name: /로그아웃/ })).toBeInTheDocument();
   });
 
+  it('프로필이 이미 있으면 — 로그인이 그대로 목록으로 간다. 공개 조회를 더 묻지 않는다', async () => {
+    await renderApp('/login', { extra: { ...SIGNUP, 'GET /api/v1/members/me': () => ok(PROFILE) } });
+
+    submitFirstLogin();
+
+    await atPath('/posts');
+    await until([PROFILE.nickname], banner);
+    expect(sent('GET /api/v1/members/me')).toHaveLength(1);
+    expect(sent(MY_PUBLIC_PROFILE)).toEqual([]);
+  });
+
+  it('내 프로필이 탈퇴한 것이면 — 프로필 등록으로 보내지 않는다(등록이 M007 이다). 목록으로 간다', async () => {
+    await renderApp('/login', {
+      extra: {
+        ...SIGNUP,
+        [MY_PUBLIC_PROFILE]: () => ok({ accountId: 7, nickname: '탈퇴한 회원', createdAt: '2026-10-01T09:00:00', deleted: true }),
+      },
+    });
+
+    submitFirstLogin();
+
+    await atPath('/posts');
+    await until(['등록된 게시글이 없습니다'], main);
+    // 머리글도 탈퇴한 프로필로 안내한다 — 같은 조회의 답이다.
+    await until([WITHDRAWN_PROFILE.M001.text], banner);
+  });
+
+  it.each([
+    ['응답 없음', (): Reply => 'no-response'],
+    ['서버 오류', (): Reply => fail(500, 'C005')],
+  ])('내 프로필 조회가 M001 이 아닌 실패(%s)면 — 로그인은 끝났으므로 목록으로 간다', async (_, reply) => {
+    const { useAuthStore } = await renderApp('/login', { extra: { ...SIGNUP, 'GET /api/v1/members/me': reply } });
+
+    submitFirstLogin();
+
+    await atPath('/posts');
+    expect(useAuthStore.getState().accessToken).toBe(accessToken('L'));
+    expect(sent(MY_PUBLIC_PROFILE)).toEqual([]);
+  });
+
+  it('공개 조회가 실패하면 — 미등록으로 보고 프로필 등록으로 간다', async () => {
+    await renderApp('/login', { extra: { ...SIGNUP, [MY_PUBLIC_PROFILE]: () => 'no-response' } });
+
+    submitFirstLogin();
+
+    await atPath('/signup/profile');
+    await screen.findByLabelText(/^닉네임/);
+  });
+
   it('프로필을 등록하면 — 머리글이 그 닉네임을 보인다. 등록 전에 받은 「프로필 없음」이 남지 않는다', async () => {
     let registered = false;
-    await renderApp('/signup', {
+    await renderApp('/login', {
       extra: {
         ...SIGNUP,
         [CREATE_PROFILE]: () => {
@@ -221,7 +317,7 @@ describe('가입', () => {
         'GET /api/v1/members/me': () => (registered ? ok(PROFILE) : fail(404, 'M001')),
       },
     });
-    submitAccount();
+    submitFirstLogin();
     const nickname = await screen.findByLabelText(/^닉네임/);
     await until([MY_PROFILE.M001.text], banner);
 
@@ -231,22 +327,6 @@ describe('가입', () => {
     await atPath('/posts');
     await until([PROFILE.nickname], banner);
     expect(banner()).not.toHaveTextContent(MY_PROFILE.M001.text);
-  });
-
-  it.each([
-    ['서버 오류 500 C005', (): Reply => fail(500, 'C005'), ERROR_SENTENCES.C005.text, 'C005'],
-    ['응답 없음', (): Reply => 'no-response', NO_RESPONSE, null],
-  ])('계정을 만든 뒤 로그인이 실패하면(%s) — 로그인 화면으로 가고 계정을 만들었다는 것과 그 실패가 보인다', async (_, reply, sentence, code) => {
-    const { useAuthStore } = await renderApp('/signup', { extra: { ...SIGNUP, [LOGIN]: reply } });
-
-    submitAccount();
-
-    await atPath('/login');
-    await until(['계정을 만들었습니다.', sentence], main);
-    if (code) expect(codeShown(code)).toBeVisible();
-    else expect(document.querySelector('[data-error-code]')).toBeNull();
-    expect(writes()).toEqual([CREATE_ACCOUNT, LOGIN]);
-    expect(useAuthStore.getState().accessToken).toBeNull();
   });
 
   it('계정 생성이 실패하면 — 그 화면에 남고 로그인하지 않는다. 필드 오류는 입력칸 옆이다', async () => {
@@ -261,6 +341,238 @@ describe('가입', () => {
     expect(within(beside(screen.getByLabelText(/^비밀번호/))).getByText(message)).toBeInTheDocument();
     expect(writes()).toEqual([CREATE_ACCOUNT]);
     expect(pathname()).toBe('/signup');
+  });
+
+  it('로그인한 채로 계정을 만들어도 — 지금 세션이 그대로다. 만든 계정으로 로그인하지 않는다', async () => {
+    const { useAuthStore } = await renderApp('/signup', {
+      loggedIn: true,
+      extra: { ...SIGNUP, 'GET /api/v1/members/me': () => ok(PROFILE) },
+    });
+    const before = useAuthStore.getState().sessionGeneration;
+
+    submitAccount();
+
+    await until([CHECK_MAIL], main);
+    await settled();
+    expect(writes()).toEqual([CREATE_ACCOUNT]);
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: accessToken('1'),
+      refreshToken: 'RT-1',
+      sessionGeneration: before,
+    });
+    expect(within(banner()).getByRole('button', { name: /로그아웃/ })).toBeInTheDocument();
+  });
+});
+
+/* ───────── 이메일 인증 ───────── */
+
+/** 메일의 링크가 싣는 토큰. 서버는 base64url 로 만든다(sp-auth `AccountTokens`) — `-`·`_` 가 들어간다. */
+const LINK_TOKEN = 'Zm9v-YmFy_YmF6-link';
+const VERIFY_LINK = `/verify-email#token=${LINK_TOKEN}`;
+const CONFIRMED: Routes = { [CONFIRM]: () => NO_CONTENT };
+const verifyButton = () => within(main()).queryByRole('button', { name: /이메일 인증하기|확인 중/ });
+
+describe('이메일 인증', () => {
+  it('링크를 열면 — 주소창에서 토큰을 지우고 아무 요청도 보내지 않는다. 기록을 하나 더 쌓지 않는다', async () => {
+    const entries = window.history.length;
+    const { router } = await renderApp(VERIFY_LINK, { extra: CONFIRMED });
+
+    await until(['아래 버튼을 누르면 이메일 인증을 마칩니다.'], main);
+    await waitFor(() => expect(window.location.hash).toBe(''));
+    await settled();
+
+    expect(pathname()).toBe('/verify-email');
+    expect(window.location.href).not.toContain(LINK_TOKEN);
+    expect(router.state.location.hash).toBe('');
+    expect(window.history.length).toBe(entries);
+    expect(verifyButton()).toBeEnabled();
+    expect(sent(CONFIRM)).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+
+  it('버튼을 누르면 — 그 토큰으로 한 번 확인하고 마쳤다고 보인다. 토큰을 주지 않으므로 로그인으로 안내한다', async () => {
+    const { useAuthStore } = await renderApp(VERIFY_LINK, { extra: CONFIRMED });
+    await waitFor(() => expect(window.location.hash).toBe(''));
+
+    fireEvent.click(verifyButton()!);
+
+    await until(['이메일 인증을 마쳤습니다.', '이제 로그인할 수 있습니다.'], main);
+    expect(within(main()).getByRole('link', { name: '로그인하기' })).toHaveAttribute('href', '/login');
+    expect(verifyButton()).toBeNull();
+    expect(within(main()).queryByRole('link', { name: '인증 메일 다시 받기' })).toBeNull();
+    expect(sent(CONFIRM).map((r) => r.body)).toEqual([{ token: LINK_TOKEN }]);
+    expect(writes()).toEqual([CONFIRM]);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+  });
+
+  it('로그인한 탭에서 눌러도 — 확인 요청에 Access Token 을 싣지 않는다. 세션은 그대로다', async () => {
+    const { useAuthStore } = await renderApp(VERIFY_LINK, { loggedIn: true, extra: CONFIRMED });
+    await until(['아래 버튼을 누르면'], main);
+
+    fireEvent.click(verifyButton()!);
+
+    await until(['이메일 인증을 마쳤습니다.'], main);
+    expect(sent(CONFIRM).map((r) => r.auth)).toEqual([null]);
+    // 양성 대조 — 같은 탭의 머리글 조회는 그 토큰을 싣는다.
+    expect(sent('GET /api/v1/members/me')[0].auth).toBe(`Bearer ${accessToken('1')}`);
+    expect(useAuthStore.getState().accessToken).toBe(accessToken('1'));
+  });
+
+  it('쓸 수 없는 링크(AU007)면 — 이미 인증했다면 로그인하라고 하고 로그인과 다시 받기로 안내한다. 같은 토큰으로 다시 보낼 버튼이 없다', async () => {
+    await renderApp(VERIFY_LINK, { extra: { [CONFIRM]: () => fail(400, 'AU007') } });
+    await until(['아래 버튼을 누르면'], main);
+
+    fireEvent.click(verifyButton()!);
+
+    await until([EMAIL_VERIFICATION.AU007.text], main);
+    expect(main()).toHaveTextContent('이미 인증했다면 로그인해 주세요');
+    expect(codeShown('AU007')).toBeVisible();
+    expect(within(main()).getByRole('link', { name: '로그인하기' })).toHaveAttribute('href', '/login');
+    expect(within(main()).getByRole('link', { name: '인증 메일 다시 받기' })).toHaveAttribute('href', '/verify-email/resend');
+    expect(verifyButton()).toBeNull();
+    expect(main()).not.toHaveTextContent('아래 버튼을 누르면');
+    expect(sent(CONFIRM)).toHaveLength(1);
+  });
+
+  it('확인이 실패해도 — 화면이 쥐는 오류에 링크의 토큰이 없다. 코드는 보인다', async () => {
+    await renderApp(VERIFY_LINK, { extra: { [CONFIRM]: () => fail(400, 'AU007') } });
+    await until(['아래 버튼을 누르면'], main);
+
+    fireEvent.click(verifyButton()!);
+    await waitFor(() => expect(screenErrors()).not.toEqual([]));
+
+    // 양성 대조 — 요청은 토큰을 실었다. 실패하면 axios 가 그 설정을 오류에 싣는다(lib/api/withoutRequestBody.ts).
+    expect(holds(sent(CONFIRM)[0].config, LINK_TOKEN)).toBe(true);
+    expect(holds(screenErrors(), LINK_TOKEN)).toBe(false);
+    expect(document.body.innerHTML).not.toContain(LINK_TOKEN);
+    expect(codeShown('AU007')).toBeVisible();
+  });
+
+  it.each([
+    ['응답 없음', (): Reply => 'no-response', NO_RESPONSE],
+    ['서버 오류', (): Reply => fail(500, 'C005'), ERROR_SENTENCES.C005.text],
+  ])('확인이 %s 로 실패하면 — 그 실패를 보이고 버튼이 남는다. 주소창의 토큰을 지운 뒤에도 같은 토큰으로 다시 보낸다', async (_, reply, sentence) => {
+    const replies = [reply, (): Reply => NO_CONTENT];
+    await renderApp(VERIFY_LINK, { extra: { [CONFIRM]: () => replies.shift()!() } });
+    await waitFor(() => expect(window.location.hash).toBe(''));
+
+    fireEvent.click(verifyButton()!);
+    await until([sentence], main);
+    expect(verifyButton()).toBeEnabled();
+
+    fireEvent.click(verifyButton()!);
+    await until(['이메일 인증을 마쳤습니다.'], main);
+    expect(sent(CONFIRM).map((r) => r.body)).toEqual([{ token: LINK_TOKEN }, { token: LINK_TOKEN }]);
+  });
+
+  it.each([
+    ['fragment 가 없다', '/verify-email'],
+    ['토큰이 비었다', '/verify-email#token='],
+    ['토큰이 아닌 값이다', '/verify-email#code=abc'],
+    ['토큰이 쿼리에만 있다 — 읽는 것은 fragment 뿐이다', `/verify-email?token=${LINK_TOKEN}`],
+  ])('링크에 토큰이 없으면(%s) — 확인 버튼이 없고 아무 요청도 보내지 않는다. 다시 받기로 안내한다', async (_, path) => {
+    await renderApp(path, { extra: CONFIRMED });
+
+    await until(['인증 링크를 찾지 못했습니다.'], main);
+    await settled();
+    expect(within(main()).queryByRole('button')).toBeNull();
+    expect(within(main()).getByRole('link', { name: '인증 메일 다시 받기' })).toHaveAttribute('href', '/verify-email/resend');
+    expect(window.location.hash).toBe('');
+    expect(writes()).toEqual([]);
+  });
+});
+
+/* ───────── 인증 메일 다시 받기 ───────── */
+
+const ACCEPTED: Reply = { status: 202, body: { success: true, data: null, error: null } };
+/** 202 의 문장 — 메일이 나갔다고 단정하지 않는다. */
+const REQUESTED = '요청을 받았습니다.';
+
+/** 이메일을 넣어 낸다. */
+function submitResend(email: string) {
+  type(within(main()).getByLabelText(/^이메일/), email);
+  fireEvent.submit(main().querySelector('form')!);
+}
+
+describe('인증 메일 다시 받기', () => {
+  it('202 — 계정이 있든 없든 같은 문장이다. 입력한 이메일만 싣는다', async () => {
+    // 서버는 계정의 유무와 상태에 상관없이 202 다(api-contract.md §2.4) — 두 이메일 모두 그 답이다.
+    await renderApp('/verify-email/resend', { extra: { [RESEND]: () => ACCEPTED } });
+
+    const shown: string[] = [];
+    for (const [i, email] of ['unverified@example.com', 'nobody@example.com'].entries()) {
+      submitResend(email);
+      await waitFor(() => expect(sent(RESEND)).toHaveLength(i + 1));
+      await until([REQUESTED], main);
+      shown.push(main().textContent ?? '');
+    }
+
+    expect(shown[1]).toBe(shown[0]);
+    expect(shown[0]).not.toContain('@');
+    expect(sent(RESEND).map((r) => r.body)).toEqual([{ email: 'unverified@example.com' }, { email: 'nobody@example.com' }]);
+    expect(writes()).toEqual([RESEND, RESEND]);
+  });
+
+  it('로그인한 탭에서 내도 — 재발송 요청에 Access Token 을 싣지 않는다', async () => {
+    await renderApp('/verify-email/resend', { loggedIn: true, extra: { [RESEND]: () => ACCEPTED } });
+
+    submitResend('unverified@example.com');
+
+    await until([REQUESTED], main);
+    expect(sent(RESEND).map((r) => r.auth)).toEqual([null]);
+    expect(sent('GET /api/v1/members/me')[0].auth).toBe(`Bearer ${accessToken('1')}`);
+  });
+
+  it('이메일 형식이 틀리면(C001) — 입력칸 옆에 보이고 요청을 받았다는 문장이 없다', async () => {
+    const message = '올바른 이메일 형식이 아닙니다.';
+    await renderApp('/verify-email/resend', {
+      extra: { [RESEND]: () => fail(400, 'C001', [{ field: 'email', message }]) },
+    });
+
+    submitResend('not-an-email');
+
+    await until([message], main);
+    expect(within(beside(within(main()).getByLabelText(/^이메일/))).getByText(message)).toBeInTheDocument();
+    expect(codeShown('C001')).toBeVisible();
+    // 요약에는 다시 적지 않는다 — 한 번만 보인다.
+    expect(within(main()).getAllByText(message)).toHaveLength(1);
+    expect(main()).not.toHaveTextContent(REQUESTED);
+  });
+
+  it('요청을 받았다고 보인 뒤에 다시 낸 것이 실패하면 — 앞의 문장을 남기지 않는다', async () => {
+    const replies = [(): Reply => ACCEPTED, (): Reply => fail(500, 'C005')];
+    await renderApp('/verify-email/resend', { extra: { [RESEND]: () => replies.shift()!() } });
+
+    submitResend('unverified@example.com');
+    await until([REQUESTED], main);
+    submitResend('unverified@example.com');
+
+    await until([ERROR_SENTENCES.C005.text], main);
+    expect(main()).not.toHaveTextContent(REQUESTED);
+  });
+});
+
+/* ───────── 인증 전의 로그인 ───────── */
+
+describe('인증 전의 로그인', () => {
+  it('403 AU006 — 인증을 마쳐야 한다고 하고 인증 메일을 다시 받는 화면으로 안내한다. 세션이 되지 않는다', async () => {
+    const { useAuthStore } = await renderApp('/login', { extra: { ...SIGNUP, [LOGIN]: () => fail(403, 'AU006') } });
+
+    submitFirstLogin();
+
+    await until([ERROR_SENTENCES.AU006.text], main);
+    expect(codeShown('AU006')).toBeVisible();
+    const resend = within(main()).getByRole('link', { name: '인증 메일 다시 받기' });
+    expect(resend).toHaveAttribute('href', '/verify-email/resend');
+    expect(pathname()).toBe('/login');
+    expect(writes()).toEqual([LOGIN]);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionGeneration: 0 });
+    // 프로필을 묻지 않았다 — 로그인이 끝나지 않았다.
+    expect(sent('GET /api/v1/members/me')).toEqual([]);
+
+    fireEvent.click(resend);
+    await atPath('/verify-email/resend');
+    await screen.findByRole('heading', { name: '인증 메일 다시 받기' });
   });
 });
 
@@ -293,29 +605,44 @@ function holding({ useAuthStore, useApiLogStore, queryClient }: Stores): string[
 }
 
 /**
- * 비밀번호는 계정을 만드는 화면의 입력값에만 둔다. 다음 화면으로 가면 그 화면과 함께 사라지고(멈춘 가입은 그 화면의 입력칸에 남는다), 저장소·스토어·캐시·다음 화면에
- * 넘기는 값에는 어느 때에도 두지 않는다 — 화면과 스토어가 쥐는 오류에도 요청 본문이 없다.
+ * 비밀번호는 그것을 받는 화면의 입력값에만 둔다. 계정을 만들면 가입 화면이 입력값을 비우고 폼 대신 메일 안내를 그리고, 로그인하면 다음
+ * 화면으로 가며 그 화면과 함께 사라진다. 저장소·스토어·캐시·다음 화면에 넘기는 값에는 어느 때에도 두지 않는다 — 화면과 스토어가 쥐는
+ * 오류에도 요청 본문이 없다.
  */
 describe('가입의 비밀번호', () => {
   it.each([
-    ['로그인 성공 — 프로필 등록으로', (): Reply => ok(tokens('L')), '/signup/profile'],
-    ['로그인 실패 — 로그인 화면으로', (): Reply => fail(500, 'C005'), '/login'],
-  ])('%s: 로그인 요청 뒤에 비밀번호를 든 자리가 없다', async (_, loginReply, landing) => {
+    {
+      name: '계정 생성 — 메일 안내로',
+      key: CREATE_ACCOUNT,
+      path: '/signup',
+      submit: submitAccount,
+      landing: '/signup',
+      arrived: () => until([CHECK_MAIL], main),
+    },
+    {
+      name: '인증한 뒤 첫 로그인 — 프로필 등록으로',
+      key: LOGIN,
+      path: '/login',
+      submit: submitFirstLogin,
+      landing: '/signup/profile',
+      arrived: () => screen.findByLabelText(/^닉네임/),
+    },
+  ])('$name: 비밀번호를 싣는 요청 뒤에 비밀번호를 든 자리가 없다', async ({ key, path, submit, landing, arrived }) => {
     let stores!: Stores;
     let configHeld = false;
     let inputSeen = false;
-    const duringLogin: string[][] = [];
+    const duringRequest: string[][] = [];
     const onChange: string[] = [];
-    stores = await renderApp('/signup', {
+    stores = await renderApp(path, {
       extra: {
         ...SIGNUP,
-        [LOGIN]: (config) => {
+        [key]: (config) => {
           // 보낸 때의 요청 설정 — 실패하면 axios 가 이 객체를 오류에 싣는다.
           configHeld = holds(config, PASSWORD);
-          // 로그인하는 동안은 입력칸이 그려져 있다 — 비밀번호는 거기에만 있다.
+          // 요청을 기다리는 동안은 입력칸이 그려져 있다 — 비밀번호는 거기에만 있다.
           inputSeen = inputHolds(PASSWORD);
-          duringLogin.push(holding(stores));
-          return loginReply();
+          duringRequest.push(holding(stores));
+          return SIGNUP[key](config);
         },
       },
     });
@@ -332,19 +659,20 @@ describe('가입의 비밀번호', () => {
     const watch = () => onChange.push(...holding(stores));
     const unsubscribe = [stores.useAuthStore.subscribe(watch), stores.useApiLogStore.subscribe(watch)];
 
-    submitAccount();
-    await atPath(landing);
+    submit();
     // 도착한 화면이 다 그려진 뒤에 본다.
-    await (landing === '/login' ? until(['계정을 만들었습니다.'], main) : screen.findByLabelText(/^닉네임/));
+    await arrived();
+    expect(pathname()).toBe(landing);
     unsubscribe.forEach((u) => u());
 
-    // 양성 대조 — 로그인 요청의 설정은 비밀번호를 실었고, 이 검사는 그 모양을 들여다본다.
+    // 양성 대조 — 요청의 설정은 비밀번호를 실었고, 이 검사는 그 모양을 들여다본다.
     expect(configHeld).toBe(true);
     expect(inputSeen).toBe(true);
-    expect(duringLogin).toEqual([[]]);
+    expect(duringRequest).toEqual([[]]);
     expect(onChange).toEqual([]);
     expect(holding(stores)).toEqual([]);
-    // 화면에도 없다 — 비밀번호 입력칸을 가진 화면이 내려갔다.
+    // 화면에도 없다 — 비밀번호 입력칸이 내려갔다.
+    expect(screen.queryByLabelText(/^비밀번호/)).toBeNull();
     expect([...document.querySelectorAll('input')].map((input) => input.value)).not.toContain(PASSWORD);
     expect(document.body.innerHTML).not.toContain(PASSWORD);
   });
@@ -929,11 +1257,16 @@ describe('탈퇴와 겹친 재발급', () => {
       return null;
     }
 
+    // 로그인 화면은 로그인한 뒤 갈 곳을 묻는 데 쿼리 클라이언트를 쓴다 — 앱처럼 감싼다(App.tsx).
+    const { QueryClientProvider } = await import('@tanstack/react-query');
+    const { newQueryClient } = await import('@/lib/queryClient');
     render(
-      <MemoryRouter>
-        <LoginPage />
-        <EndsBeforeEffects />
-      </MemoryRouter>,
+      <QueryClientProvider client={newQueryClient()}>
+        <MemoryRouter>
+          <LoginPage />
+          <EndsBeforeEffects />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     expect(await screen.findByText(DONE)).toBeInTheDocument();
@@ -1027,34 +1360,18 @@ describe('탈퇴와 겹친 재발급', () => {
 });
 
 describe('로그인 화면이 이어 보이는 안내', () => {
-  it.each([
-    [
-      '계정을 만든 뒤 로그인하지 못함',
-      '계정을 만들었습니다.',
-      async () => {
-        await renderApp('/signup', { extra: { ...SIGNUP, [LOGIN]: () => fail(500, 'C005') } });
-        submitAccount();
-      },
-    ],
-    [
-      '탈퇴를 마침',
-      DONE,
-      async () => {
-        await openMyPage(WITHDRAWN);
-        submitWithdrawal();
-      },
-    ],
-  ])('%s — 한 번 보이고 나면 지운다. 다른 화면에 갔다 다시 와도 보이지 않는다', async (_, notice, act) => {
-    await act();
+  it('탈퇴를 마침 — 한 번 보이고 나면 지운다. 다른 화면에 갔다 다시 와도 보이지 않는다', async () => {
+    await openMyPage(WITHDRAWN);
+    submitWithdrawal();
     await atPath('/login');
-    await until([notice], main);
+    await until([DONE], main);
 
     fireEvent.click(within(banner()).getByRole('link', { name: '게시판' }));
     await until(['등록된 게시글이 없습니다'], main);
     fireEvent.click(within(banner()).getByRole('link', { name: '로그인' }));
     await until(['계정이 없으면'], main);
 
-    expect(main()).not.toHaveTextContent(notice);
+    expect(main()).not.toHaveTextContent(DONE);
   });
 });
 
@@ -1659,26 +1976,6 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
       expect(screen.getByRole('alert')).toHaveTextContent(LOGOUT_FAILED);
     });
 
-    it('기다리는 사이에 화면을 옮겨 가입을 끝냈으면 — 늦은 응답이 그 세션을 덮지 않고 화면을 옮기지 않는다', async () => {
-      const first = held(() => ok(tokens('A')));
-      const { router, useAuthStore } = await renderApp('/login', {
-        extra: { ...SIGNUP, [LOGIN]: (config) => (emailOf(config) === EMAIL ? ok(tokens('L')) : first.handler()) },
-      });
-      submitLogin();
-      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
-      await act(() => router.navigate('/signup'));
-      await until(['계정 만들기'], main);
-      submitAccount();
-      await atPath('/signup/profile');
-
-      first.open();
-      await settled();
-
-      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('L'), refreshToken: 'RT-L' });
-      expect(storedTokens()).toEqual(['RT-L']);
-      expect(pathname()).toBe('/signup/profile');
-    });
-
     it('기다리는 사이에 로그인 화면을 다시 열어 다른 계정으로 로그인했으면 — 늦은 응답이 그 세션을 덮지 않고 화면을 옮기지 않는다', async () => {
       const first = held(() => ok(tokens('A')));
       const { router, useAuthStore } = await renderApp('/login', {
@@ -1742,19 +2039,80 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
       expect(storedTokens()).toEqual(['RT-B']);
       expect(sent(LOGOUT).map((r) => r.body)).toEqual([{ refreshToken: 'RT-1' }]);
     });
+
+    /**
+     * 로그인은 토큰을 받은 뒤 갈 곳을 정하려고 내 프로필을 묻는다(pages/LoginPage.tsx 의 `landing`). 그 답을 기다리는 사이에 로그아웃하거나
+     * 다른 로그인을 시작했으면 이 세션은 지나갔다 — 답이 무엇이든 옮겨 가지 않는다. 지나간 곳을 라우터에서 모은다 — 프로필 등록은 보호된
+     * 경로라 토큰이 없으면 로그인으로 되돌아오므로 마지막 주소만으로는 들렀는지 알 수 없다.
+     */
+    it.each([
+      ['내 프로필 조회', 'GET /api/v1/members/me'],
+      ['공개 조회', MY_PUBLIC_PROFILE],
+    ])('로그인한 뒤 %s 를 기다리는 사이에 로그아웃했으면 — 그 답이 와도 옮겨 가지 않는다', async (_, key) => {
+      const answer = held(() => fail(404, 'M001'));
+      const { router, useAuthStore } = await renderApp('/login', {
+        extra: { ...SIGNUP, [key]: answer.handler, [LOGOUT]: () => NO_CONTENT },
+      });
+      submitFirstLogin();
+      await waitFor(() => expect(sent(key)).toHaveLength(1));
+      const visited: string[] = [];
+      const stop = router.subscribe((state) => visited.push(state.location.pathname));
+
+      clickLogout();
+      await waitFor(() => expect(useAuthStore.getState().accessToken).toBeNull());
+      answer.open();
+      await settled();
+      stop();
+
+      // 로그아웃이 로그인 화면으로 옮긴 것뿐이다.
+      expect([...new Set(visited)]).toEqual(['/login']);
+      expect(pathname()).toBe('/login');
+      expect(writes()).toEqual([LOGIN, LOGOUT]);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
+    });
+
+    it('로그인한 뒤 내 프로필을 기다리는 사이에 다른 계정으로 로그인했으면 — 앞 로그인은 옮겨 가지 않는다. 나중 로그인이 갈 곳으로 간다', async () => {
+      const me = held(() => fail(404, 'M001'));
+      const { router, useAuthStore } = await renderApp('/login', {
+        extra: {
+          ...SIGNUP,
+          [LOGIN]: (config) => ok(tokens(emailOf(config) === EMAIL ? 'L' : 'B')),
+          // 앞 로그인의 조회만 붙잡는다. 나중 로그인의 계정도 프로필이 없다 — 프로필 등록으로 간다.
+          'GET /api/v1/members/me': (config) =>
+            config.headers?.Authorization === `Bearer ${accessToken('L')}` ? me.handler() : fail(404, 'M001'),
+        },
+      });
+      submitFirstLogin();
+      await waitFor(() => expect(sent('GET /api/v1/members/me')).toHaveLength(1));
+      await act(() => router.navigate('/posts'));
+      await toLoginScreen(router);
+      const visited: string[] = [];
+      const stop = router.subscribe((state) => visited.push(state.location.pathname));
+
+      submitLogin();
+      await atPath('/signup/profile');
+      me.open();
+      await settled();
+      stop();
+
+      expect([...new Set(visited)]).toEqual(['/signup/profile']);
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+    });
   });
 
+  /**
+   * 가입은 로그인하지 않는다(F-08) — 계정 생성의 응답은 세션에 손대지 않고, 기다리는 사이에 시작된 로그인이나 로그아웃을 버리지 않는다.
+   * 가입 화면이 아직 떠 있으면 그 자리에 메일 안내를 그리고, 떠났으면 그릴 화면이 없다.
+   */
   describe('가입', () => {
     /** 다른 계정으로 로그인한 뒤의 화면은 프로필이 있다 — 머리글의 조회가 성공한다. */
     const SIGNED_IN_ELSEWHERE: Routes = { 'GET /api/v1/members/me': () => ok(PROFILE) };
     const ACCOUNT_CREATED = (): Reply => ({ status: 201, body: { success: true, data: { accountId: 8, email: EMAIL }, error: null } });
-    /** 계정을 만든 뒤에 멈춘 가입의 안내 — 가입 화면이 아직 떠 있으면 그 자리에 보인다. */
-    const CREATED_NOTICE = `${EMAIL} 계정을 만들었습니다. 이 이메일로 로그인해 주세요.`;
-    /** 어느 화면의 것이든 계정을 만들었다는 안내 — 로그인 화면의 안내(가입의 로그인이 실패함)도 이 말로 시작한다. */
+    /** 계정을 만들었다는 안내 — 메일 안내가 이 말로 시작한다. */
     const CREATED = '계정을 만들었습니다';
     const signupButton = () => within(main()).getByRole('button', { name: '계정 만들기' });
 
-    it('계정 생성을 기다리는 사이에 다른 계정으로 로그인했으면 — 가입의 로그인을 보내지 않는다. 그 세션이 그대로다', async () => {
+    it('계정 생성을 기다리는 사이에 다른 계정으로 로그인했으면 — 늦은 응답이 그 세션에 손대지 않고 화면을 옮기지 않는다. 옮겨 간 화면에 메일 안내가 없다', async () => {
       const account = held(ACCOUNT_CREATED);
       const { router, useAuthStore } = await renderApp('/signup', {
         extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [CREATE_ACCOUNT]: account.handler, [LOGIN]: () => ok(tokens('B')) },
@@ -1762,19 +2120,23 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
       submitAccount();
       await waitFor(() => expect(sent(CREATE_ACCOUNT)).toHaveLength(1));
       await loginAsOther(router);
+      const generation = useAuthStore.getState().sessionGeneration;
 
       account.open();
       await settled();
 
       expect(loginEmails()).toEqual([OTHER_EMAIL]);
-      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
+      expect(useAuthStore.getState()).toMatchObject({
+        accessToken: accessToken('B'),
+        refreshToken: 'RT-B',
+        sessionGeneration: generation,
+      });
       expect(storedTokens()).toEqual(['RT-B']);
       expect(pathname()).toBe('/posts');
-      // 가입 화면을 떠났다 — 계정을 만들었다는 안내를 옮겨 간 화면에 보이지 않는다.
       expect(document.body).not.toHaveTextContent(CREATED);
     });
 
-    it('계정 생성을 기다리는 사이에 낸 로그인이 아직 돌아도 — 가입의 로그인을 보내지 않는다. 나중에 낸 로그인이 세션이 된다', async () => {
+    it('계정 생성을 기다리는 사이에 낸 로그인은 — 계정 생성의 응답이 먼저 와도 버리지 않는다. 그 로그인이 세션이 된다', async () => {
       const account = held(ACCOUNT_CREATED);
       const login = held(() => ok(tokens('B')));
       const { router, useAuthStore } = await renderApp('/signup', {
@@ -1792,89 +2154,31 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
       expect(document.body).not.toHaveTextContent(CREATED);
 
       login.open();
-      await atPath('/posts');
+      await atPostList();
       expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
     });
 
-    it('가입의 로그인을 기다리는 사이에 다른 계정으로 로그인했으면 — 늦은 응답이 그 세션을 덮지 않고 화면을 옮기지 않는다', async () => {
-      const login = held(() => ok(tokens('L')));
-      const { router, useAuthStore } = await renderApp('/signup', {
-        extra: {
-          ...SIGNUP,
-          ...SIGNED_IN_ELSEWHERE,
-          [LOGIN]: (config) => (emailOf(config) === EMAIL ? login.handler() : ok(tokens('B'))),
-        },
-      });
-      submitAccount();
-      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
-      await loginAsOther(router);
-
-      login.open();
-      await settled();
-
-      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), refreshToken: 'RT-B' });
-      expect(storedTokens()).toEqual(['RT-B']);
-      expect(pathname()).toBe('/posts');
-      expect(document.body).not.toHaveTextContent(CREATED);
-    });
-
-    it('가입의 로그인이 다른 계정으로 로그인한 뒤에 실패하면 — 로그인 화면으로 끌어가지 않고 안내를 남기지 않는다', async () => {
-      const login = held(() => fail(500, 'C005'));
-      const { router, useAuthStore } = await renderApp('/signup', {
-        extra: {
-          ...SIGNUP,
-          ...SIGNED_IN_ELSEWHERE,
-          [LOGIN]: (config) => (emailOf(config) === EMAIL ? login.handler() : ok(tokens('B'))),
-        },
-      });
-      submitAccount();
-      await waitFor(() => expect(sent(LOGIN)).toHaveLength(1));
-      await loginAsOther(router);
-
-      login.open();
-      await settled();
-
-      expect(pathname()).toBe('/posts');
-      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('B'), signupLoginFailure: null });
-      expect(document.body).not.toHaveTextContent('계정을 만들었습니다.');
-    });
-
-    /**
-     * 로그인한 채로 가입을 내고, 그 응답을 기다리는 사이에 누른 로그아웃이 실패한다 — 가입은 멈추고(로그아웃도 누를 때 로그인 번호를 올린다)
-     * 가입 화면은 그대로 떠 있다.
-     */
-    it.each([
-      ['계정 생성', CREATE_ACCOUNT, ACCOUNT_CREATED, [CREATE_ACCOUNT, LOGOUT]],
-      ['가입의 로그인(그 응답은 성공)', LOGIN, (): Reply => ok(tokens('L')), [CREATE_ACCOUNT, LOGIN, LOGOUT]],
-      ['가입의 로그인(그 응답은 실패)', LOGIN, (): Reply => fail(500, 'C005'), [CREATE_ACCOUNT, LOGIN, LOGOUT]],
-    ])('%s을 기다리는 사이에 누른 로그아웃이 실패해 가입 화면에 머물면 — 계정을 만들었다는 것과 그 이메일로 로그인하라고 보이고 계정 만들기 버튼이 막힌다. 세션은 그대로다', async (_, key, reply, expected) => {
-      const answer = held(reply);
+    it('계정 생성을 기다리는 사이에 누른 로그아웃이 실패해 가입 화면에 머물면 — 계정을 만들었으므로 메일 안내를 보인다. 세션은 그대로다', async () => {
+      const account = held(ACCOUNT_CREATED);
       const { useAuthStore } = await renderApp('/signup', {
         loggedIn: true,
-        extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [key]: answer.handler, [LOGOUT]: () => fail(500, 'C005') },
+        extra: { ...SIGNUP, ...SIGNED_IN_ELSEWHERE, [CREATE_ACCOUNT]: account.handler, [LOGOUT]: () => fail(500, 'C005') },
       });
       submitAccount();
-      await waitFor(() => expect(sent(key)).toHaveLength(1));
+      await waitFor(() => expect(sent(CREATE_ACCOUNT)).toHaveLength(1));
       clickLogout();
       await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(LOGOUT_FAILED));
 
-      answer.open();
+      account.open();
 
-      await until([CREATED_NOTICE], main);
-      expect(within(main()).getByRole('link', { name: '로그인하기' })).toHaveAttribute('href', '/login');
-      expect(signupButton()).toBeDisabled();
-      expect(writes()).toEqual(expected);
+      await until([CHECK_MAIL, `${EMAIL} ${CREATED}.`], main);
+      expect(writes()).toEqual([CREATE_ACCOUNT, LOGOUT]);
       expect(pathname()).toBe('/signup');
-      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('1'), refreshToken: 'RT-1', signupLoginFailure: null });
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: accessToken('1'), refreshToken: 'RT-1' });
       expect(storedTokens()).toEqual(['RT-1']);
-
-      // 안내는 만든 계정의 이메일이다 — 멈춘 뒤 이메일 칸을 고쳐도 그 칸의 값으로 바뀌지 않는다.
-      type(within(main()).getByLabelText(/^이메일/), OTHER_EMAIL);
-      expect(main()).toHaveTextContent(CREATED_NOTICE);
-      expect(main()).not.toHaveTextContent(`${OTHER_EMAIL} 계정을 만들었습니다`);
     });
 
-    it('계정 생성이 실패하면 — 누른 로그아웃이 실패해 멈췄어도 그 실패를 보이고 계정을 만들었다는 안내가 없다. 계정 만들기 버튼은 막히지 않는다', async () => {
+    it('계정 생성이 실패하면 — 기다리는 사이에 누른 로그아웃이 실패했어도 그 실패를 보이고 메일 안내가 없다. 계정 만들기 버튼은 막히지 않는다', async () => {
       const account = held(() => fail(500, 'C005'));
       await renderApp('/signup', {
         loggedIn: true,
@@ -1893,7 +2197,7 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
       expect(writes()).toEqual([CREATE_ACCOUNT, LOGOUT]);
     });
 
-    it('계정 생성을 기다리는 사이에 로그아웃했으면 — 가입 화면을 떠났으므로 옮겨 간 로그인 화면에 계정을 만들었다는 안내가 없고 가입 화면으로 끌어오지 않는다. 토큰도 쓰지 않는다', async () => {
+    it('계정 생성을 기다리는 사이에 로그아웃했으면 — 가입 화면을 떠났으므로 옮겨 간 로그인 화면에 메일 안내가 없고 가입 화면으로 끌어오지 않는다. 토큰도 쓰지 않는다', async () => {
       const account = held(ACCOUNT_CREATED);
       const { useAuthStore } = await renderApp('/signup', {
         loggedIn: true,
@@ -1912,7 +2216,7 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
       expect(writes()).toEqual([CREATE_ACCOUNT, LOGOUT]);
       expect(pathname()).toBe('/login');
       expect(document.body).not.toHaveTextContent(CREATED);
-      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, signupLoginFailure: null });
+      expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null });
       expect(storedTokens()).toEqual([]);
     });
   });

@@ -3,37 +3,37 @@ import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Check } from 'lucide-react';
 import { clsx } from 'clsx';
-import { checkEmail, createAccount, login } from '@/features/auth/api';
+import { checkEmail, createAccount } from '@/features/auth/api';
 import { checkNickname, createProfile } from '@/features/member/api';
 import { fieldMessages } from '@/lib/api/client';
-import type { TokenResponse } from '@/lib/api/types';
 import { withoutRequestBody } from '@/lib/api/withoutRequestBody';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { useMounted } from '@/lib/useMounted';
-import { beginLogin, useAuthStore } from '@/stores/authStore';
+import { useAuthStore } from '@/stores/authStore';
 import { Button, ErrorBox, Field, Input, Panel, RecoveryLink } from '@/components/ui';
 
 /**
- * 가입. **사용자가 내는 것은 계정 정보와 닉네임이다** — 사이의 로그인은 화면이 방금 입력한 비밀번호로 한다
- * (sp-docs/plan/phase2.md §7.1). 서버의 단계는 그대로다(api-contract.md §9.1).
+ * 가입. **사용자가 내는 것은 계정 정보와 닉네임이고, 그 사이에 메일의 링크로 인증하고 로그인한다**(F-08). 서버의 단계는 그대로다
+ * (api-contract.md §9.1·§9.10).
  *
- * 1) `POST /api/v1/accounts` (auth, 무인증)
- * 2) `POST /api/v1/auth/login` (auth, 무인증) — 토큰을 받는다
+ * 1) `POST /api/v1/accounts` (auth, 무인증) — 커밋 뒤 인증 메일이 나간다
+ *    `POST /api/v1/accounts/email-verification/confirm` (auth, 무인증) — 메일의 링크를 연 인증 화면(pages/VerifyEmailPage.tsx)
+ * 2) `POST /api/v1/auth/login` (auth, 무인증) — 로그인 화면(pages/LoginPage.tsx). 프로필이 없으면 프로필 등록으로 간다
  * 3) `POST /api/v1/members` (member, 인증) — `accountId` 는 본문이 아니라 JWT `sub` 에서 온다
  *
- * **1단계만 끝난 상태도 정상이다** — 로그인·탈퇴는 되고 글 작성만 `S002` 로 막힌다. 그래서 계정을 만든 뒤 로그인이
- * 실패하면 로그인 화면으로 보낸다.
+ * **계정을 만든 화면은 로그인하지 않는다** — 인증 전의 로그인은 403 `AU006` 이다(requirements/member.md §3 규칙 11·§4). 「메일을 확인하세요」
+ * 로 끝난다. 2026-10-27 의 결정(계정을 만들면 같은 비밀번호로 바로 로그인한다, F-04)은 그때의 계약 위에 있었다.
  */
-const STEPS = ['계정 만들기', '프로필 등록'];
+const STEPS = ['계정 만들기', '이메일 인증', '프로필 등록'];
 
-function Steps({ current }: { current: number }) {
+export function Steps({ current }: { current: number }) {
   return (
-    <ol className="flex items-center gap-2 text-xs">
+    <ol className="flex flex-wrap items-center gap-2 text-xs">
       {STEPS.map((label, i) => (
         <li
           key={label}
           className={clsx(
-            'flex items-center gap-1 rounded-md px-2 py-1',
+            'flex items-center gap-1 rounded-md px-2 py-1 break-keep',
             i === current ? 'bg-accent-50 font-medium text-accent-700' : 'text-faint',
           )}
         >
@@ -90,44 +90,44 @@ function Checked({ text }: { text: string | null }) {
 }
 
 /**
- * 가입의 첫 화면 — 계정을 만들고 같은 비밀번호로 바로 로그인한다. **비밀번호는 이 화면의 입력값에만 둔다** — 이 화면이
- * 쥐는 오류는 요청 본문을 비운 사본이다(`useSubmit`). 다음 화면으로 가면(`/signup/profile` 은 다른 컴포넌트다) 이 화면과 함께
- * 입력값이 사라진다. 저장소에도, 다음 화면에 넘기는 값에도 두지 않는다.
+ * 가입의 첫 화면 — 계정을 만든다. **비밀번호는 이 화면의 입력값에만 둔다** — 이 화면이 쥐는 오류는 요청 본문을 비운 사본이다
+ * (`useSubmit`). 저장소에도, 다른 화면에 넘기는 값에도 두지 않는다. 계정을 만들면 입력값을 비우고 폼 대신 메일 안내를 그린다 — 비밀번호
+ * 입력칸이 함께 내려간다.
+ *
+ * 로그인하지 않으므로 세션에 손대지 않는다 — 기다리는 사이에 다른 로그인이나 로그아웃이 있어도 가를 것이 없다. 화면을 떠났으면 늦게 온
+ * 응답이 바꿀 화면이 없다.
  */
 export function SignupPage() {
-  const navigate = useNavigate();
-  const setTokens = useAuthStore((s) => s.setTokens);
   const { busy, error, checked, run, check } = useSubmit();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  // 멈춘 가입이 만든 계정의 이메일 — 아래 `submit`.
+  // 만든 계정의 이메일 — 서버가 돌려준 값이다. 인증 메일은 그 주소로 간다(requirements/member.md §11).
   const [created, setCreated] = useState<string | null>(null);
 
-  // 계정 생성이 실패하면 이 화면에 남는다 — 로그인하지 않는다. 그 사이 다른 로그인이나 로그아웃을 시작했으면 여기서 멈춘다 — 그 응답을
-  // 세션으로 삼지 않는다. 만든 계정은 그대로이고 1단계만 끝난 상태는 정상이다(api-contract.md §9.1). 계정을 만든 뒤에 멈췄으면 이 화면이
-  // 아직 떠 있을 때 그 사실과 할 일을 보이고 제출 버튼을 막는다. 떠났으면 보이지 않는다 — 내려간 화면의 상태는 바뀌지 않는다. 어느 쪽이든
-  // 옮기지도 토큰을 쓰지도 않는다.
   const submit = () =>
     run(async () => {
-      const latest = beginLogin();
-      await createAccount(email, password);
-      const stopped = () => setCreated(email);
-      if (!latest()) return stopped();
-      let tokens: TokenResponse;
-      try {
-        tokens = await login(email, password);
-      } catch (e) {
-        if (!latest()) return stopped();
-        // 계정은 만들어졌다. 1단계만 끝난 상태는 정상이므로 로그인 화면으로 보내고 그 화면이 이 실패를 보인다. 스토어는
-        // 요청 본문(비밀번호)을 비운 사본만 남긴다(stores/authStore.ts).
-        useAuthStore.getState().setSignupLoginFailure(e);
-        navigate('/login', { replace: true });
-        return;
-      }
-      if (!latest()) return stopped();
-      setTokens(tokens);
-      navigate('/signup/profile', { replace: true });
+      const account = await createAccount(email, password);
+      setPassword('');
+      setCreated(account.email);
     });
+
+  if (created !== null) {
+    return (
+      <div className="mx-auto max-w-md space-y-4">
+        <Steps current={1} />
+        <Panel title="메일을 확인하세요">
+          <div className="space-y-2 text-sm text-default">
+            {/* 이메일은 띄어쓰기 없이 길 수 있다 — 줄을 바꾸지 않으면 좁은 화면에서 가로로 스크롤된다(F-05). */}
+            <p className="wrap-anywhere">{created} 계정을 만들었습니다.</p>
+            <p>이 주소로 인증 메일을 보냅니다. 메일의 링크를 열어 인증을 마친 뒤 로그인해 주세요.</p>
+            <p className="text-muted">
+              메일이 오지 않으면 <RecoveryLink recovery="resendVerification" />
+            </p>
+          </div>
+        </Panel>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-md space-y-4">
@@ -157,13 +157,7 @@ export function SignupPage() {
           </Field>
           <Checked text={checked} />
           <ErrorBox error={error} inlineFields={['email', 'password']} />
-          {created !== null ? (
-            // 이메일은 띄어쓰기 없이 길 수 있다 — 줄을 바꾸지 않으면 좁은 화면에서 가로로 스크롤된다(F-05).
-            <p className="text-sm text-default wrap-anywhere">
-              {created} 계정을 만들었습니다. 이 이메일로 로그인해 주세요. <RecoveryLink recovery="login" />
-            </p>
-          ) : null}
-          <Button type="submit" variant="primary" disabled={busy || created !== null} className="w-full justify-center">
+          <Button type="submit" variant="primary" disabled={busy} className="w-full justify-center">
             {busy ? '보내는 중…' : '계정 만들기'}
           </Button>
         </form>
@@ -173,8 +167,9 @@ export function SignupPage() {
 }
 
 /**
- * 가입의 마지막 화면 — 프로필을 등록한다. 프로필 없이 로그인한 계정도 프로필 등록 안내를 따라 여기로 온다
- * (errorCodes.ts 의 `MY_PROFILE`·`S002`). 등록은 인증 요청이라 **보호된 경로다**(router.tsx).
+ * 가입의 마지막 화면 — 프로필을 등록한다. 인증한 뒤 처음 로그인했을 때 프로필이 없으면 로그인 화면이 여기로 보낸다(pages/LoginPage.tsx).
+ * 프로필 없이 로그인한 계정도 프로필 등록 안내를 따라 여기로 온다(errorCodes.ts 의 `MY_PROFILE`·`S002`). 등록은 인증 요청이라
+ * **보호된 경로다**(router.tsx).
  */
 export function SignupProfilePage() {
   const navigate = useNavigate();
@@ -194,7 +189,7 @@ export function SignupProfilePage() {
 
   return (
     <div className="mx-auto max-w-md space-y-4">
-      <Steps current={1} />
+      <Steps current={2} />
       <Panel title="프로필 등록">
         <form
           className="space-y-3"

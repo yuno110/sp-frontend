@@ -1,4 +1,16 @@
-import { MY_PROFILE, ME, NICKNAME, ok, fail, pageOf, tokens } from './api.ts';
+import {
+  CONFIRM_EMAIL,
+  LINK_TOKEN,
+  ME,
+  MY_PROFILE,
+  NICKNAME,
+  NO_CONTENT,
+  VERIFY_LINK,
+  fail,
+  ok,
+  pageOf,
+  tokens,
+} from './api.ts';
 import { tabTo } from './checks.ts';
 import { expect, test } from './fixtures.ts';
 
@@ -31,13 +43,16 @@ test('로그인', async ({ page, api }) => {
   ]);
 });
 
-test('가입 — 계정을 만들고 프로필을 등록한다', async ({ page, api }) => {
-  // 프로필을 등록하기 전에는 내 프로필 조회가 404 M001 이다(sp-docs/api-contract.md §3).
+test('가입 — 계정을 만들고, 메일의 링크로 인증하고, 로그인해 프로필을 등록한다', async ({ page, api }) => {
+  // 프로필을 등록하기 전에는 내 프로필 조회가 404 M001 이고 공개 조회도 없는 프로필이다(sp-docs/api-contract.md §3·§3.1).
   let registered = false;
   api.use({
     'POST /api/v1/accounts': ok({ accountId: ME.accountId, email: EMAIL }, 201),
+    [CONFIRM_EMAIL]: NO_CONTENT,
     'POST /api/v1/auth/login': () => ok(tokens(ME)),
     'GET /api/v1/members/me': () => (registered ? ok(MY_PROFILE) : fail('M001')),
+    [`GET /api/v1/members/${ME.accountId}`]: () =>
+      registered ? ok({ ...MY_PROFILE, createdAt: '2026-10-28T09:00:00', deleted: false }) : fail('M001'),
     'POST /api/v1/members': () => {
       registered = true;
       return ok(MY_PROFILE, 201);
@@ -46,11 +61,36 @@ test('가입 — 계정을 만들고 프로필을 등록한다', async ({ page, 
   await page.goto('/signup');
   const main = page.getByRole('main');
 
+  // 계정을 만든다 — 화면은 로그인하지 않고 메일을 확인하라고 한다.
   await tabTo(page, main.getByLabel('이메일', { exact: true }));
   await page.keyboard.type(EMAIL);
   await tabTo(page, main.getByLabel('비밀번호', { exact: true }));
   await page.keyboard.type(PASSWORD);
   await tabTo(page, main.getByRole('button', { name: '계정 만들기', exact: true }));
+  await page.keyboard.press('Enter');
+  await expect(main.getByRole('heading', { name: '메일을 확인하세요' })).toBeVisible();
+  expect(api.keys().filter((k) => k.startsWith('POST'))).toEqual(['POST /api/v1/accounts']);
+
+  // 메일의 링크를 연다 — 주소창에서 토큰이 사라지고, 누르기 전에는 확인하지 않는다(sp-docs/security.md §12).
+  await page.goto(VERIFY_LINK);
+  const verify = main.getByRole('button', { name: '이메일 인증하기', exact: true });
+  await expect(verify).toBeVisible();
+  await expect.poll(() => new URL(page.url()).hash).toBe('');
+  expect(page.url()).not.toContain(LINK_TOKEN);
+  expect(api.keys().filter((k) => k === CONFIRM_EMAIL)).toEqual([]);
+  await tabTo(page, verify);
+  await page.keyboard.press('Enter');
+  await expect(main.getByText('이메일 인증을 마쳤습니다.')).toBeVisible();
+
+  // 인증은 토큰을 주지 않는다 — 안내를 따라 로그인한다. 프로필이 없으므로 프로필 등록으로 간다.
+  await tabTo(page, main.getByRole('link', { name: '로그인하기', exact: true }));
+  await page.keyboard.press('Enter');
+  await page.waitForURL((url) => url.pathname === '/login');
+  await tabTo(page, main.getByLabel('이메일', { exact: true }));
+  await page.keyboard.type(EMAIL);
+  await tabTo(page, main.getByLabel('비밀번호', { exact: true }));
+  await page.keyboard.type(PASSWORD);
+  await tabTo(page, main.getByRole('button', { name: '로그인', exact: true }));
   await page.keyboard.press('Enter');
 
   await page.waitForURL((url) => url.pathname === '/signup/profile');
@@ -63,9 +103,11 @@ test('가입 — 계정을 만들고 프로필을 등록한다', async ({ page, 
   await expect(page.getByRole('banner').getByText(NICKNAME)).toBeVisible();
   expect(api.keys().filter((k) => k.startsWith('POST'))).toEqual([
     'POST /api/v1/accounts',
+    CONFIRM_EMAIL,
     'POST /api/v1/auth/login',
     'POST /api/v1/members',
   ]);
+  expect(api.sent.find((s) => s.key === CONFIRM_EMAIL)?.body).toEqual({ token: LINK_TOKEN });
   expect(api.sent.find((s) => s.key === 'POST /api/v1/members')?.body).toEqual({ nickname: NICKNAME });
 });
 

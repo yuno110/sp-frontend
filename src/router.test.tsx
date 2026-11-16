@@ -81,7 +81,15 @@ describe('세션이 끝난 이유를 보이는 화면', () => {
 
     expect(marked.map((leaf) => leaf.path)).toEqual(staying.map((leaf) => leaf.path));
     // 양성 대조 — 위 걸음이 라우트의 컴포넌트를 실제로 가른다. 이름을 읽지 못하면 모두 머무는 화면이 된다.
-    expect(staying.map((leaf) => leaf.path)).toEqual(['signup', 'posts', 'posts/:id', 'members/:accountId', 'tokens']);
+    expect(staying.map((leaf) => leaf.path)).toEqual([
+      'signup',
+      'verify-email',
+      'verify-email/resend',
+      'posts',
+      'posts/:id',
+      'members/:accountId',
+      'tokens',
+    ]);
   });
 });
 

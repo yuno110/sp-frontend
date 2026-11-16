@@ -41,11 +41,6 @@ interface AuthState {
    */
   withdrawal: 'account' | 'done' | null;
   /**
-   * 가입이 계정을 만든 뒤 이어서 한 로그인의 실패(pages/SignupPage.tsx 가 남긴다). 로그인 화면이 한 번 보이고 지운다.
-   * 영속하지 않는다. 남기는 것은 요청 본문을 비운 사본이다(`withoutRequestBody`).
-   */
-  signupLoginFailure: unknown;
-  /**
    * 세션의 세대. 로그인(`setTokens`)과 세션의 끝(`clear`)에서 오르고 재발급(`setReissuedTokens`)에서는 오르지 않는다 — 재발급은 같은
    * 세션이 이어지는 것이다. 응답이 온 요청이 지금 세션의 것인지 가르는 값이다(lib/api/client.ts). 토큰을 비교해서는 가를 수 없다 — 같은
    * 계정이 같은 초에 받은 토큰은 문자열이 같다(sp-docs/requirements/member.md §6.2). 쿼리 캐시의 수명도 이 값이 정한다
@@ -59,7 +54,6 @@ interface AuthState {
   setAccessToken: (accessToken: string) => void;
   setSessionFailure: (failure: unknown) => void;
   setWithdrawal: (withdrawal: 'account' | 'done' | null) => void;
-  setSignupLoginFailure: (failure: unknown) => void;
   clear: () => void;
 }
 
@@ -111,7 +105,6 @@ export const useAuthStore = create<AuthState>()((set) => ({
   restoring: persisted !== null,
   sessionFailure: null,
   withdrawal: null,
-  signupLoginFailure: null,
   sessionGeneration: 0,
   setTokens: (t) =>
     set((s) => ({
@@ -132,8 +125,6 @@ export const useAuthStore = create<AuthState>()((set) => ({
   setAccessToken: (accessToken) => set({ accessToken, ...claimsOf(accessToken) }),
   setSessionFailure: (sessionFailure) => set({ sessionFailure: withoutRequestBody(sessionFailure) }),
   setWithdrawal: (withdrawal) => set({ withdrawal }),
-  setSignupLoginFailure: (signupLoginFailure) =>
-    set({ signupLoginFailure: withoutRequestBody(signupLoginFailure) }),
   clear: () =>
     set((s) => ({
       accessToken: null,

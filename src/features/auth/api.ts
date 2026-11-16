@@ -1,7 +1,14 @@
 import http, { requireTokens, unwrap } from '@/lib/api/client';
 import type { ApiResponse, TokenResponse } from '@/lib/api/types';
 
-/** auth-service. 정본은 sp-docs/api-contract.md §2 다. */
+/**
+ * auth-service. 정본은 sp-docs/api-contract.md §2 다.
+ *
+ * **로그인·재발급과 §2.4 의 무인증 요청은 `Authorization` 을 싣지 않는다** — 그 요청에 `{ headers: { Authorization: null } }` 를 준다
+ * (CLAUDE.md 「경계」). 정하지 않으면 요청 인터셉터가 스토어의 Access Token 을 싣고(lib/api/client.ts), 서버의 bearer 필터는 무인증
+ * 경로에서도 실린 토큰을 검증해 핸들러에 닿기 전에 401 로 끊는다 — 만료면 `A003`, 잘못된 토큰이면 `A002` 다(sp-auth 의
+ * `SecurityConfigTest` 가 로그인·인증 확인 경로에서 묶었다, AU-13).
+ */
 
 export interface AccountCreated {
   accountId: number;
@@ -19,11 +26,40 @@ export function createAccount(email: string, password: string) {
   return unwrap(http.post<ApiResponse<AccountCreated>>('/api/v1/accounts', { email, password }));
 }
 
-/** 자격증명 필드 이름은 `password` 다 — 하나뿐이면 그 이름이 기본이다(§2.2). */
+/**
+ * 자격증명 필드 이름은 `password` 다 — 하나뿐이면 그 이름이 기본이다(§2.2). 무인증이라 Access Token 을 싣지 않는다(이 파일 머리 주석) —
+ * 실으면 만료된 토큰을 든 탭의 로그인이 자격증명을 보이기도 전에 401 이 된다.
+ */
 export async function login(email: string, password: string) {
   return requireTokens(
-    await unwrap(http.post<ApiResponse<TokenResponse>>('/api/v1/auth/login', { email, password })),
+    await unwrap(
+      http.post<ApiResponse<TokenResponse>>(
+        '/api/v1/auth/login',
+        { email, password },
+        { headers: { Authorization: null } },
+      ),
+    ),
   );
+}
+
+/**
+ * 인증 메일 재발송(§2.4). 무인증이다. **202 의 본문은 `data: null` 이라 `unwrap` 을 쓰지 않는다** — `unwrap` 은 data 가 없는 2xx 를
+ * 계약 위반으로 본다. 202 는 계정의 상태를 말하지 않는다 — 계정이 없거나 탈퇴했거나 이미 인증됐어도 같은 답이다.
+ */
+export async function resendVerification(email: string): Promise<void> {
+  await http.post<ApiResponse<null>>(
+    '/api/v1/accounts/email-verification',
+    { email },
+    { headers: { Authorization: null } },
+  );
+}
+
+/**
+ * 이메일 인증 확인(§2.4). 무인증이다 — 링크를 연 탭이 로그인돼 있지 않아도 되고, 다른 계정으로 로그인돼 있어도 그 세션과 상관없다.
+ * 성공은 204 이고 본문이 없다. **토큰을 주지 않는다** — 로그인은 따로 한다.
+ */
+export async function confirmEmailVerification(token: string): Promise<void> {
+  await http.post('/api/v1/accounts/email-verification/confirm', { token }, { headers: { Authorization: null } });
 }
 
 /**

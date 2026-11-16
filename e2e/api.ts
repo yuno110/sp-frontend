@@ -43,6 +43,8 @@ const ERRORS = {
   P001: { status: 404, message: '게시글을 찾을 수 없습니다.' },
   S002: { status: 403, message: '활성 프로필이 필요합니다.' },
   AU003: { status: 401, message: '이메일 또는 비밀번호가 일치하지 않습니다.' },
+  AU006: { status: 403, message: '이메일 인증이 필요합니다.' },
+  AU007: { status: 400, message: '링크가 유효하지 않거나 만료되었습니다.' },
 } as const;
 
 export const fail = (code: keyof typeof ERRORS, fieldErrors: FieldError[] = []): Reply => ({
@@ -86,6 +88,13 @@ export const tokens = (who: Who) => ({
   refreshToken: `refresh-${who.accountId}-${Date.now()}`,
   accessTokenExpiresIn: 1800,
 });
+
+/** 이메일 인증의 두 요청(§2.4). 확인은 204 이고 토큰을 주지 않는다. 재발송은 계정이 있든 없든 202 다. */
+export const CONFIRM_EMAIL = 'POST /api/v1/accounts/email-verification/confirm';
+export const RESEND_VERIFICATION = 'POST /api/v1/accounts/email-verification';
+/** 메일의 링크가 싣는 토큰 — 서버는 base64url 로 만든다. 링크는 토큰을 fragment 에 싣는다(sp-docs/requirements/member.md §11.5). */
+export const LINK_TOKEN = 'Zm9v-YmFy_e2e-link';
+export const VERIFY_LINK = `/verify-email#token=${LINK_TOKEN}`;
 
 // ── 화면에 그릴 값. 이메일·닉네임·제목의 길이는 입력 제약의 끝으로 둔다 — 360px 폭에서 넘치는지 보려는 것이다
 //    (sp-docs/requirements/member.md §2, requirements/board.md §4).

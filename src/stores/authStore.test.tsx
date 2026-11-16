@@ -1776,12 +1776,14 @@ describe('세션과 쿼리 캐시', () => {
     await submitLogin();
     await waitFor(() => expect(sentBy(ME)).toEqual([bearer('1'), bearer('B')]));
 
-    expect(pathname()).toBe('/posts');
+    // 로그인 화면은 갈 곳을 정하려고 새 프로필의 답을 기다린다(pages/LoginPage.tsx 의 `landing`) — 그동안 그 자리에 있다.
+    expect(pathname()).toBe('/login');
     expect(header()).toHaveTextContent('…');
     expect(header()).not.toHaveTextContent('NICK-A');
 
     profileB.resolve();
     await within(header()).findByText('NICK-B');
+    await waitFor(() => expect(pathname()).toBe('/posts'));
 
     expect(shownAgain(seen, 'NICK-A')).toEqual([]);
   });
@@ -2132,24 +2134,6 @@ describe('토큰이 빠진 로그인 응답', () => {
     expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, accountId: null, sessionGeneration: 0 });
     expect(stored()).toEqual([]);
     expect(within(document.querySelector('header')!).getByRole('link', { name: '가입' })).toBeInTheDocument();
-  });
-
-  it.each(WITHOUT)('가입 — %s: 계정을 만든 뒤의 로그인 실패로 로그인 화면이 보인다. 토큰을 저장하지 않는다', async (_, body) => {
-    routes = {
-      'POST /api/v1/accounts': () => ok({ accountId: 7, email: 'user@example.com' }),
-      'POST /api/v1/auth/login': () => ok(body),
-    };
-    const { useAuthStore } = await renderApp('/signup');
-
-    fireEvent.change(await screen.findByLabelText('이메일'), { target: { value: 'user@example.com' } });
-    fireEvent.change(screen.getByLabelText('비밀번호'), { target: { value: 'password' } });
-    fireEvent.click(screen.getByRole('button', { name: '계정 만들기' }));
-
-    await waitFor(() => expect(pathname()).toBe('/login'));
-    expect(await screen.findByText(/계정을 만들었습니다/)).toBeInTheDocument();
-    expect(screen.getByText(UNEXPECTED)).toBeInTheDocument();
-    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionGeneration: 0 });
-    expect(stored()).toEqual([]);
   });
 
   it('두 토큰이 다 있으면 — 로그인한다', async () => {

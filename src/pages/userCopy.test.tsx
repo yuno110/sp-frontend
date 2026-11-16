@@ -52,6 +52,8 @@ const SERVER_MESSAGE: Record<string, string> = {
   S002: '활성 프로필이 필요합니다.',
   AU003: '이메일 또는 비밀번호가 일치하지 않습니다.',
   AU004: '현재 비밀번호가 일치하지 않습니다.',
+  AU006: '이메일 인증이 필요합니다.',
+  AU007: '링크가 유효하지 않거나 만료되었습니다.',
 };
 
 const ok = (data: unknown): Reply => ({ status: 200, body: { success: true, data, error: null } });
@@ -223,17 +225,11 @@ afterEach(() => {
 
 /* ───────── 가입·탈퇴로 가는 조작 ───────── */
 
-/** 계정 정보를 낸다 — 계정을 만든 화면이 이어서 로그인한다(F-04). */
+/** 계정 정보를 낸다 — 계정을 만든 화면은 로그인하지 않고 메일 안내를 그린다(F-08). */
 function submitAccount() {
   type(screen.getByLabelText(/^이메일/), 'new@example.com');
   type(screen.getByLabelText(/^비밀번호/), 'Passw0rd!');
   fireEvent.submit(main().querySelector('form')!);
-}
-
-/** 프로필 등록 화면까지. 단계 표시에도 「프로필 등록」이 있으므로 그 화면에만 있는 입력칸으로 기다린다. */
-async function signupToProfileStep() {
-  submitAccount();
-  await screen.findByLabelText(/^닉네임/);
 }
 
 /** 마이페이지의 탈퇴 칸에서 비밀번호를 내고 탈퇴를 누른다. */
@@ -250,33 +246,21 @@ const WITHDRAWN_BOTH: Routes = {
 };
 
 const SIGNUP_ROUTES: Routes = {
-  'POST /api/v1/accounts': () => ok({ accountId: 7, email: 'new@example.com' }),
-  'POST /api/v1/auth/login': () =>
-    ok({ grantType: 'Bearer', accessToken: tokenOf(ME), refreshToken: 'RT-1', accessTokenExpiresIn: 1800 }),
-  ...NO_PROFILE,
+  'POST /api/v1/accounts': () => ({
+    status: 201,
+    body: { success: true, data: { accountId: 7, email: 'new@example.com' }, error: null },
+  }),
 };
 
-/**
- * 계정 생성의 답을 로그아웃에 실패로 답할 때까지 미룬다 — 그 사이에 누른 로그아웃이 가입을 멈추고, 실패해서 가입 화면에 남는다. 답한 뒤에는
- * 다시 미룬다 — 같은 모듈에서 이 상태를 다시 돌려도(재시도) 로그아웃을 기다린다.
- */
-let releaseAccount!: () => void;
-let logoutFailed!: Promise<void>;
-const holdAccount = () => {
-  logoutFailed = new Promise<void>((resolve) => (releaseAccount = resolve));
-};
-holdAccount();
-const STOPPED_SIGNUP_ROUTES: Routes = {
-  'POST /api/v1/accounts': async () => {
-    await logoutFailed;
-    holdAccount();
-    return ok({ accountId: 8, email: 'new@example.com' });
-  },
-  'POST /api/v1/auth/logout': () => {
-    releaseAccount();
-    return fail(500, 'C005');
-  },
-};
+/** 메일의 링크가 여는 주소 — 토큰은 fragment 에 있다(sp-docs/requirements/member.md §11.5). */
+const VERIFY_LINK = '/verify-email#token=Zm9v-YmFy_link';
+const CONFIRM = 'POST /api/v1/accounts/email-verification/confirm';
+const RESEND = 'POST /api/v1/accounts/email-verification';
+const ACCEPTED: Reply = { status: 202, body: { success: true, data: null, error: null } };
+/** 인증 화면의 확인 버튼을 누른다 — 링크를 연 것만으로는 확인하지 않는다. */
+async function pressVerify() {
+  fireEvent.click(await within(main()).findByRole('button', { name: '이메일 인증하기' }));
+}
 
 /* ───────── 화면마다 보이는 문구 ───────── */
 
@@ -542,40 +526,89 @@ const COPY_STATES: CopyState[] = [
     },
   },
   {
-    // F-04 전의 「로그인 단계」 — 계정을 만든 뒤의 로그인을 화면이 하므로, 그 결과가 사용자에게 보이는 것은 실패했을 때다.
-    name: '가입 — 계정을 만들었지만 로그인하지 못함',
+    name: '가입 — 계정을 만듦, 메일을 확인하세요',
     path: '/signup',
-    extra: { ...SIGNUP_ROUTES, 'POST /api/v1/auth/login': () => fail(500, 'C005') },
+    extra: SIGNUP_ROUTES,
     ready: async () => {
       submitAccount();
-      await until(['계정을 만들었습니다.'], main);
-      await errorShown();
+      await until(['메일을 확인하세요', '인증 메일 다시 받기'], main);
     },
   },
   {
-    name: '가입 — 계정을 만들었지만 기다리는 사이에 누른 로그아웃이 실패해 이어서 로그인하지 않음',
-    path: '/signup',
-    as: ME,
-    extra: STOPPED_SIGNUP_ROUTES,
-    ready: async () => {
-      await until(['테스트닉'], banner);
-      submitAccount();
-      fireEvent.click(within(banner()).getByRole('button', { name: /로그아웃/ }));
-      await until(['계정을 만들었습니다.', '로그인하기'], main);
-      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('로그아웃하지 못했습니다.'));
-    },
-  },
-  {
+    // 인증한 뒤 처음 로그인하면 프로필이 없어 이리로 온다(pages/LoginPage.tsx).
     name: '가입 — 프로필 단계, 닉네임 중복 확인',
-    path: '/signup',
-    extra: { ...SIGNUP_ROUTES, 'GET /api/v1/members/check-nickname': () => ok({ available: true }) },
+    path: '/signup/profile',
+    as: ME,
+    extra: { ...NO_PROFILE, 'GET /api/v1/members/check-nickname': () => ok({ available: true }) },
     ready: async () => {
-      await signupToProfileStep();
-      type(screen.getByLabelText(/^닉네임/), '새닉');
+      type(await screen.findByLabelText(/^닉네임/), '새닉');
       fireEvent.click(screen.getByRole('button', { name: '중복 확인' }));
       await until(['쓸 수 있는 닉네임입니다']);
       // 머리글의 프로필 조회가 그려질 때까지. 프로필 등록 화면에서는 그리로 가는 링크를 두지 않는다(components/ui.tsx).
       await until([MY_PROFILE.M001.text], banner);
+    },
+  },
+  {
+    name: '로그인 — 인증 전의 계정(AU006)',
+    path: '/login',
+    extra: { 'POST /api/v1/auth/login': () => fail(403, 'AU006') },
+    ready: async () => {
+      fireEvent.submit(main().querySelector('form')!);
+      await errorShown();
+      await until(['인증 메일 다시 받기'], main);
+    },
+  },
+  {
+    name: '이메일 인증 — 링크를 연 화면',
+    path: VERIFY_LINK,
+    ready: () => until(['이메일 인증하기', '인증 메일 다시 받기'], main),
+  },
+  {
+    name: '이메일 인증 — 마침',
+    path: VERIFY_LINK,
+    extra: { [CONFIRM]: () => NO_CONTENT },
+    ready: async () => {
+      await pressVerify();
+      await until(['이메일 인증을 마쳤습니다.', '로그인하기'], main);
+    },
+  },
+  {
+    name: '이메일 인증 — 쓸 수 없는 링크(AU007)',
+    path: VERIFY_LINK,
+    extra: { [CONFIRM]: () => fail(400, 'AU007') },
+    ready: async () => {
+      await pressVerify();
+      await errorShown();
+      await until(['로그인하기', '인증 메일 다시 받기'], main);
+    },
+  },
+  {
+    name: '이메일 인증 — 확인이 응답 없음',
+    path: VERIFY_LINK,
+    extra: { [CONFIRM]: () => 'no-response' },
+    ready: async () => {
+      await pressVerify();
+      await errorShown();
+    },
+  },
+  {
+    name: '이메일 인증 — 링크에 토큰이 없음',
+    path: '/verify-email',
+    ready: () => until(['인증 링크를 찾지 못했습니다.'], main),
+  },
+  {
+    name: '인증 메일 다시 받기 — 입력 전',
+    path: '/verify-email/resend',
+    ready: () => until(['인증 메일 보내기'], main),
+  },
+  {
+    name: '인증 메일 다시 받기 — 요청을 받음',
+    path: '/verify-email/resend',
+    extra: { [RESEND]: () => ACCEPTED },
+    ready: async () => {
+      type(screen.getByLabelText(/^이메일/), 'new@example.com');
+      fireEvent.submit(main().querySelector('form')!);
+      await until(['요청을 받았습니다.'], main);
     },
   },
   {
@@ -1055,6 +1088,8 @@ describe('공개 화면에서 세션이 끝날 때', () => {
     ['글 상세', '/posts/1', [POST.content]],
     ['작성자 프로필', '/members/7', ['테스트닉']],
     ['가입', '/signup', ['계정 만들기']],
+    ['이메일 인증', VERIFY_LINK, ['이메일 인증하기']],
+    ['인증 메일 다시 받기', '/verify-email/resend', ['인증 메일 보내기']],
   ])('%s — 새로고침 복원이 거부되면 화면을 그대로 두고 그 자리에서 이유를 보인다', async (_, path, drawn) => {
     await loggedInOnPreviousPage();
     await renderApp(path, { strict: true, extra: { 'POST /api/v1/auth/reissue': () => fail(401, 'A002') } });
@@ -1064,7 +1099,8 @@ describe('공개 화면에서 세션이 끝날 때', () => {
     expect(notice()).toHaveTextContent(ERROR_SENTENCES.A002.text);
     expect(within(notice()).getByText('A002')).toBeVisible();
     expect(within(notice()).getByRole('link', { name: '로그인하기' })).toHaveAttribute('href', '/login');
-    expect(window.location.pathname).toBe(path);
+    // 그 자리다 — 인증 화면은 연 주소의 fragment 만 지운다.
+    expect(window.location.pathname).toBe(path.split('#')[0]);
     expect(hits()).toEqual([]);
     expect(plainEndings()).toEqual([]);
   });
@@ -1271,6 +1307,16 @@ const FIELD_CASES: FieldCase[] = [
     extra: { 'GET /api/v1/accounts/check-email': C001([{ field: 'email', message: '올바른 이메일 형식이 아닙니다.' }]) },
     act: async () => {
       fireEvent.click(screen.getByRole('button', { name: '중복 확인' }));
+      await errorShown();
+      return [[screen.getByLabelText(/^이메일/), '올바른 이메일 형식이 아닙니다.']];
+    },
+  },
+  {
+    name: '인증 메일 다시 받기',
+    path: '/verify-email/resend',
+    extra: { [RESEND]: C001([{ field: 'email', message: '올바른 이메일 형식이 아닙니다.' }]) },
+    act: async () => {
+      fireEvent.submit(main().querySelector('form')!);
       await errorShown();
       return [[screen.getByLabelText(/^이메일/), '올바른 이메일 형식이 아닙니다.']];
     },

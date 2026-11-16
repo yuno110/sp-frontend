@@ -10,6 +10,8 @@ export const ROUTES = [
   '/login',
   '/signup',
   '/signup/profile',
+  '/verify-email',
+  '/verify-email/resend',
   '/posts/mine',
   '/posts/new',
   '/posts',
