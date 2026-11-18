@@ -113,8 +113,9 @@ export function Layout() {
     }
     if (!session.same()) return;
     // `flushSync` 로 옮긴다 — 로그인 화면을 동기로 그려 떠나는 화면을 캐시를 비우는 커밋 뒤에 남기지 않는다. 없으면 옮기기가 전환으로
-    // 미뤄져 떠나는 화면이 비운 캐시로 다시 묻는다(lib/queryClient.ts) — 글 상세는 조회할 때마다 조회수가 오른다. 지우기는 옮긴 뒤에 하고,
-    // 옮기기를 기다리는 사이에 시작된 세션은 지우지 않는다.
+    // 미뤄져 떠나는 화면이 비운 캐시로 다시 묻는다(lib/queryClient.ts) — 글 상세면 그 조회는 토큰 없이 나가 로그인한 계정과 다른
+    // 조회자이므로 조회수를 올릴 수 있다(sp-docs/requirements/board.md §9.2). 지우기는 옮긴 뒤에 하고, 옮기기를 기다리는 사이에 시작된
+    // 세션은 지우지 않는다.
     await navigate('/login', { flushSync: true });
     if (!session.same()) return;
     clear();

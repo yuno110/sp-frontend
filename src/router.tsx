@@ -1,4 +1,4 @@
-import { Navigate, createBrowserRouter } from 'react-router-dom';
+import { Navigate, createBrowserRouter, useParams } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { Layout, type RouteHandle } from '@/components/Layout';
 import { LoginPage } from '@/pages/LoginPage';
@@ -34,6 +34,15 @@ function RequireToken({ children }: { children: ReactNode }) {
 
 /** 토큰이 비어도 머무는 화면(`RequireToken` 밖의 화면)이 단다 — 세션이 끝난 이유를 그 자리에서 보인다(components/Layout.tsx). */
 const PUBLIC_SCREEN: RouteHandle = { showsSessionFailure: true };
+
+/**
+ * 글 상세는 글마다 새로 그린다(글 id 를 `key` 로). 같은 자리라 key 가 없으면 기록으로 다른 글의 상세에 바로 갈 때(예: 두 칸 뒤로) 화면
+ * 하나가 이어진다 — 앞 글에서 누른 좋아요의 응답을 기다리는 동안 바뀐 글의 버튼도 막혔다(2026-11-18 F-13 리뷰 측정).
+ */
+function PostDetailRoute() {
+  const { id } = useParams();
+  return <PostDetailPage key={id} />;
+}
 
 /**
  * /posts/mine 과 /posts/new 가 /posts/:id 보다 먼저 선언되어 있다. 라우터는 리터럴을
@@ -91,7 +100,7 @@ export const router = createBrowserRouter([
       // 잡지 않으면 `posts/:id` 가 `me` 를 글 id 로 받아 **목록 응답을 상세로 그린다** —
       // 200 이라 오류도 뜨지 않고 제목·본문이 빈 화면이 된다(불변식 9 성격).
       { path: 'posts/me', element: <Navigate to="/posts/mine" replace /> },
-      { path: 'posts/:id', element: <PostDetailPage />, handle: PUBLIC_SCREEN },
+      { path: 'posts/:id', element: <PostDetailRoute />, handle: PUBLIC_SCREEN },
       // `posts/me` 와 같은 함정이다 — `posts/:id/edit` 이 `me` 를 글 id 로 받아 **목록 응답을 글로 읽고 빈 수정 폼을 그린다.**
       { path: 'posts/me/edit', element: <Navigate to="/posts/mine" replace /> },
       {

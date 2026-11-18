@@ -176,10 +176,16 @@ export const listOf =
   };
 
 /** 상세의 `liked` 는 토큰이 없으면 `null` 이다 — 키는 언제나 있다(§4.3). */
-const detailOf =
+export const detailOf =
   (detail: typeof POST_DETAIL): Answer =>
   (request) =>
     ok({ ...detail, liked: request.headers().authorization ? detail.liked : null });
+
+/** 좋아요를 누르는(`LIKE`)·취소하는(`UNLIKE`) 요청(§4.6) — 본문이 없다. 기본 답에 두지 않는다 — 누르는 테스트가 그 답을 정한다. */
+export const LIKE = 'PUT /api/v1/posts/1/like';
+export const UNLIKE = 'DELETE /api/v1/posts/1/like';
+/** 좋아요의 응답 — 그 요청 뒤의 상태다. `PUT` 이면 `liked` 가 `true`, `DELETE` 면 `false` 다(§4.6). */
+export const likeState = (liked: boolean, likeCount: number): Reply => ok({ liked, likeCount });
 
 export const COMMENTS = [
   { id: 5, writerId: ME.accountId, writerNickname: NICKNAME, content: `내 댓글 ${LONG_WORD}`, createdAt: '2026-10-27T09:30:00' },

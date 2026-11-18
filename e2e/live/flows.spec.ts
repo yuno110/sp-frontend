@@ -49,6 +49,9 @@ const postPanel = (page: Page) => main(page).locator('section').filter({ has: pa
 /** 그 경로의 다음 GET 응답 — 기다리기 시작한 뒤에 온 것이다. 쿼리는 보지 않는다. */
 const nextGet = (page: Page, path: string) =>
   page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === path);
+/** 글 목록 화면이 보낼 다음 목록 GET — 그 요청의 board 주소와 Access Token 을 `commentOutside` 가 쓴다. 화면을 열기 전에 부른다. */
+const nextListSent = (page: Page) =>
+  page.waitForRequest((r) => r.method() === 'GET' && new URL(r.url()).pathname === '/api/v1/posts');
 
 /**
  * 글 목록 화면의 다음 두 GET 이 끝난다 — 목록과 최근 공지다. 화면은 둘을 같은 경로로 함께 묻고(F-12) 쿼리의 `category` 로 갈린다.
@@ -72,12 +75,30 @@ const nextLists = (page: Page) =>
   );
 
 /**
- * 상세가 그 응답을 그렸다. 상세는 받아 둔 것을 먼저 그리고 다시 받는다 — 상세 조회는 조회수를 올리므로 다시 받은 응답의
- * 조회수가 보이면 그 응답이 그려진 것이다.
+ * 상세가 다시 받은 응답을 그렸다 — 글 칸 머리의 댓글 수가 그 응답의 것이다. 상세는 받아 둔 것을 먼저 그리고 다시 받는데, 같은
+ * 조회자의 재조회는 조회수를 올리지 않아(sp-docs/requirements/board.md §9.2) 받아 둔 것과 다시 받은 것이 같을 수 있다 — 같으면
+ * 그려진 값으로 둘을 가르지 못한다. 그래서 부르는 쪽이 화면이 상세를 받아 둔 뒤 화면 밖에서 댓글을 달아(`commentOutside`) 다시
+ * 받은 응답의 댓글 수만 다르게 해 둔다. `comments` 는 그 댓글을 단 뒤의 수다 — 응답이 그 수인지 먼저 본다.
  */
-async function detailDrawn(page: Page, response: Response) {
-  const { data } = (await response.json()) as { data: { viewCount: number } };
-  await expect(postPanel(page).getByText(new RegExp(`조회 ${data.viewCount} `))).toBeVisible();
+async function detailDrawn(page: Page, response: Response, comments: number) {
+  const { data } = (await response.json()) as { data: { commentCount: number } };
+  expect(data.commentCount, '다시 받은 응답이 화면 밖의 댓글을 셌다').toBe(comments);
+  await expect(postPanel(page).getByText(new RegExp(`· 댓글 ${comments}$`))).toBeVisible();
+}
+
+/**
+ * 화면 밖에서 그 글에 댓글을 단다 — 화면이 받아 둔 상세와 서버의 상세가 댓글 수로 갈린다(`detailDrawn`). board 의 주소와 Access
+ * Token 은 화면이 보낸 요청(`sent`)의 것을 그대로 쓴다 — 흐름의 계정이 단 댓글이라 README 의 정리 절차가 지운다. 화면의 요청이
+ * 아니므로 `Traffic` 에 섞이지 않는다.
+ */
+async function commentOutside(page: Page, sent: Request, postId: string) {
+  const { authorization } = await sent.allHeaders();
+  expect(authorization, '화면이 실은 Access Token').toMatch(/^Bearer /);
+  const response = await page.request.post(`${new URL(sent.url()).origin}/api/v1/posts/${postId}/comments`, {
+    headers: { authorization },
+    data: { content: `화면 밖 댓글 ${unique()}` },
+  });
+  expect(response.status(), await response.text()).toBe(201);
 }
 
 /** 로그인 상태 — 머리글이 닉네임과 로그아웃을 보인다. */
@@ -352,13 +373,16 @@ test('글 작성 → 상세 → 수정 → 삭제 — 각 단계가 반영되고
   const detail = `/posts/${id}`;
   await expect(main(page).getByText(content, { exact: true })).toBeVisible();
 
-  // 목록에서 그 글을 찾아 연다. 상세가 다시 받은 것을 그릴 때까지 기다린다.
+  // 목록에서 그 글을 찾아 연다. 상세가 다시 받은 것을 그릴 때까지 기다린다 — 화면이 상세를 받아 둔 뒤 화면 밖에서 댓글을 달아
+  // 다시 받은 것만 댓글이 1 이다.
+  const listed = nextListSent(page);
   await banner(page).getByRole('link', { name: '게시판', exact: true }).click();
   await at(page, '/posts');
+  await commentOutside(page, await listed, id);
   const reread = nextGet(page, `/api/v1${detail}`);
   await main(page).getByRole('link', { name: title, exact: true }).click();
   await at(page, detail);
-  await detailDrawn(page, await reread);
+  await detailDrawn(page, await reread, 1);
   await expect(postPanel(page).getByRole('link', { name: account.nickname, exact: true })).toBeVisible();
   await expect(main(page).getByText(content, { exact: true })).toBeVisible();
 
@@ -461,14 +485,17 @@ test('닉네임 수정 — 과거 글의 작성자 이름이 그대로다(스냅
   // 글은 작성 당시의 닉네임을 갖는다(sp-docs/adr/0003) — 목록과 상세 둘 다, 개명 뒤에 서버에서 다시 받은 것으로 본다. 받아 둔
   // 목록은 글을 쓰기 전에 받은 것이라 그 행이 없다. 상세는 개명 전에 받아 둔 것을 먼저 그리므로 다시 받은 응답이 그려지기를
   // 기다린다.
+  const listed = nextListSent(page);
   await banner(page).getByRole('link', { name: '게시판', exact: true }).click();
   await at(page, '/posts');
   const row = main(page).getByRole('row').filter({ hasText: title });
   await expect(row.getByRole('link', { name: account.nickname, exact: true })).toBeVisible();
+  // 화면 밖의 댓글은 개명 뒤에 단다 — 댓글 칸에는 새 닉네임이 보이므로 작성자 이름은 글 칸에서만 본다.
+  await commentOutside(page, await listed, id);
   const reread = nextGet(page, `/api/v1/posts/${id}`);
   await row.getByRole('link', { name: title, exact: true }).click();
   await at(page, `/posts/${id}`);
-  await detailDrawn(page, await reread);
+  await detailDrawn(page, await reread, 1);
   await expect(postPanel(page).getByRole('link', { name: account.nickname, exact: true })).toBeVisible();
   await expect(postPanel(page).getByText(renamed)).toHaveCount(0);
 
@@ -506,7 +533,9 @@ test('글 상세에서 로그아웃 — 떠나는 화면이 다시 묻지 않아
   const account = await signUp(page);
   const title = `e2e 조회수 ${unique()}`;
   await writePost(page, title, `본문 ${unique()}`);
-  // 상세가 글과 댓글을 다 그렸다. 글 칸의 조회수가 지금 저장된 값이다 — 이 조회가 올린 뒤의 값이다.
+  // 상세가 글과 댓글을 다 그렸다. 글 칸의 조회수가 지금 저장된 값이다 — 이 조회가 올린 뒤의 값이다. 떠나는 화면이 다시 물으면
+  // 그 조회는 토큰 없이 나가 이 계정과 다른 조회자이므로 조회수가 오른다(sp-docs/requirements/board.md §9.2) — 같은 계정의
+  // 재조회는 24시간 안이면 오르지 않는다.
   await expect(panel(page, '댓글 0').getByText('댓글이 없습니다', { exact: true })).toBeVisible();
   const line = await postPanel(page).getByText(/조회 \d+ /).innerText();
   const views = /조회 (\d+) /.exec(line)?.[1];

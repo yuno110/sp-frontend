@@ -4,8 +4,8 @@ import { expect, test } from './fixtures.ts';
 
 /**
  * 로그아웃은 로그인 화면으로 `flushSync` 로 옮겨 떠나는 화면을 캐시를 비우는 커밋 뒤에 남기지 않는다(CLAUDE.md 「경계」). 없으면 옮기기가
- * 전환으로 미뤄져 떠나는 화면이 비운 캐시로 다시 묻고(src/lib/queryClient.ts) 글 상세는 조회할 때마다 조회수가 오른다. 실제 서비스에 저장된
- * 조회수는 e2e/live/flows.spec.ts 가 본다.
+ * 전환으로 미뤄져 떠나는 화면이 비운 캐시로 다시 묻는다(src/lib/queryClient.ts) — 글 상세면 그 조회는 토큰 없이 나가 로그인한 계정과 다른
+ * 조회자이므로 조회수를 올릴 수 있다(sp-docs/requirements/board.md §9.2). 실제 서비스에 저장된 조회수는 e2e/live/flows.spec.ts 가 본다.
  *
  * 본문에는 그 세션의 Refresh Token 을 싣는다(sp-docs/api-contract.md §9.5) — 새로고침 복원의 재발급이 회전시켜 준 값이고, 영속 키에 두었던
  * 회전 전의 값이 아니다.

@@ -230,6 +230,7 @@ const section = (heading: RegExp) => screen.getByRole('heading', { name: heading
 const commentItem = () => screen.getByText(COMMENT.content).closest('li')!;
 /** 댓글 작성란 — 댓글 수정란은 `form` 이 아니다. */
 const commentDraft = () => main().querySelector('form textarea')!;
+const likeButton = () => within(main()).getByRole('button', { name: /^좋아요 \d+$/ });
 
 const hits = () => internalCopyIn(visibleCopy(document.body));
 const plainEndings = () => plainEndingsIn(visibleCopy(document.body));
@@ -358,7 +359,29 @@ const COPY_STATES: CopyState[] = [
   {
     name: '글 상세 — 비로그인',
     path: '/posts/1',
-    ready: () => until([POST_DETAIL.content, COMMENT.content, '댓글을 쓰려면']),
+    ready: () => until([POST_DETAIL.content, COMMENT.content, '댓글을 쓰려면', '좋아요를 누르려면']),
+  },
+  {
+    name: '글 상세 — 좋아요를 누름',
+    path: '/posts/1',
+    as: ME,
+    extra: { 'PUT /api/v1/posts/1/like': () => ok({ liked: true, likeCount: POST_DETAIL.likeCount + 1 }) },
+    ready: async () => {
+      await until([COMMENT.content]);
+      fireEvent.click(likeButton());
+      await waitFor(() => expect(likeButton()).toHaveAttribute('aria-pressed', 'true'));
+    },
+  },
+  {
+    name: '글 상세 — 좋아요 실패',
+    path: '/posts/1',
+    as: ME,
+    extra: { 'PUT /api/v1/posts/1/like': () => fail(404, 'P001') },
+    ready: async () => {
+      await until([COMMENT.content]);
+      fireEvent.click(likeButton());
+      await errorShown();
+    },
   },
   {
     name: '글 상세 — 댓글 수정 중',

@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { listPosts } from './api';
+import { likePost, listPosts, unlikePost } from './api';
 
 const get = vi.fn();
+const put = vi.fn();
+const del = vi.fn();
 
 vi.mock('@/lib/api/client', () => ({
   default: {
     get: (...args: unknown[]) => get(...args),
+    put: (...args: unknown[]) => put(...args),
+    delete: (...args: unknown[]) => del(...args),
   },
   unwrap: async (p: Promise<unknown>) => p,
 }));
@@ -63,5 +67,28 @@ describe('listPosts 의 검색 파라미터 조합', () => {
       keyword: '점검',
       category: 'QNA',
     });
+  });
+});
+
+/**
+ * 좋아요 — `PUT` 이 누르고 `DELETE` 가 취소한다. 둘 다 본문이 없다(sp-docs/api-contract.md §4.6). 화면이 보낸 요청의 메서드와 본문은
+ * src/pages/postLike.test.tsx 가 화면에서 다시 본다.
+ */
+describe('좋아요 요청', () => {
+  beforeEach(() => {
+    put.mockReset();
+    del.mockReset();
+  });
+
+  it('누르기는 그 글의 like 경로로 PUT 이고 본문을 싣지 않는다', async () => {
+    await likePost(12);
+    expect(put.mock.calls).toEqual([['/api/v1/posts/12/like']]);
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('취소는 그 글의 like 경로로 DELETE 이고 본문을 싣지 않는다', async () => {
+    await unlikePost(12);
+    expect(del.mock.calls).toEqual([['/api/v1/posts/12/like']]);
+    expect(put).not.toHaveBeenCalled();
   });
 });

@@ -2520,8 +2520,8 @@ describe('요청을 기다리는 사이에 바뀐 세션', () => {
 
 /**
  * 로그아웃과 탈퇴는 로그인 화면으로 `flushSync` 로 옮겨 떠나는 화면을 캐시를 비우는 커밋 뒤에 남기지 않는다. 없으면 옮기기가 전환으로 미뤄져
- * 떠나는 화면이 비운 캐시로 다시 묻는다(lib/queryClient.ts) — 글 상세는 조회할 때마다 조회수가 오른다. 로그아웃의 저장된 조회수는
- * e2e/live/flows.spec.ts 가 본다.
+ * 떠나는 화면이 비운 캐시로 다시 묻는다(lib/queryClient.ts) — 글 상세면 그 조회는 토큰 없이 나가 로그인한 계정과 다른 조회자이므로 조회수를
+ * 올릴 수 있다(sp-docs/requirements/board.md §9.2). 로그아웃의 저장된 조회수는 e2e/live/flows.spec.ts 가 본다.
  */
 describe('로그아웃과 탈퇴 — 떠나는 화면', () => {
   /** 상세 — 키 집합은 sp-docs/api-contract.md §4.3 이다. */

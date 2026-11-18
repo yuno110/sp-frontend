@@ -7,8 +7,10 @@ import { internalCopyIn, visibleCopy } from '@/test/internalCopy';
 /**
  * 글 수정 폼이 고칠 글로 입력칸을 채우는 때 (sp-docs/plan/phase2.md §7.2 F-06 — 실제 서비스와의 e2e 가 찾은 결함이다).
  *
- * 상세와 수정 화면은 같은 글을 같은 조회로 받고, 상세 조회는 조회수를 올리므로 다시 받을 때마다 앞의 응답과 다른 값이 온다.
- * 수정 화면이 받은 값마다 입력칸을 채우면 입력한 뒤에 온 응답이 입력을 덮고, 사용자는 고친 줄 알고 옛 값을 저장한다.
+ * 상세와 수정 화면은 같은 글을 같은 조회로 받고, 다시 받은 응답은 그 사이 다른 계정의 좋아요나 다른 조회자의 조회로 앞의 응답과
+ * 다를 수 있다. 수정 화면이 받은 값마다 입력칸을 채우면 입력한 뒤에 온 응답이 입력을 덮고, 사용자는 고친 줄 알고 옛 값을 저장한다.
+ * F-06 이 찾은 때는 상세 조회마다 조회수가 올라 다시 받을 때마다 달랐다. B-21 뒤 같은 조회자의 재조회는 24시간 안이면 조회수를 올리지
+ * 않으므로(sp-docs/requirements/board.md §9.2) 이 스텁은 첫 조회만 세고, 다시 받은 값은 다른 계정의 누르기로 바꾼다.
  *
  * 화면은 프로덕션 모드와 StrictMode 로 그린다 — 흉내는 src/pages/userCopy.test.tsx 와 같다. 요청은 axios 의 기본 어댑터로 받는다.
  */
@@ -33,6 +35,8 @@ const UPDATE = 'PUT /api/v1/posts/9';
 /** 서버에 있는 글의 제목·카테고리·본문. 카테고리는 폼의 처음 값(자유)과 다르다 — 받은 값으로 채웠는지 가른다. */
 let stored = { title: '처음 제목', category: 'QNA', content: '처음 본문' };
 let views = 0;
+/** 그 글의 좋아요 수 — 다른 계정이 누르면 테스트가 올린다. */
+let likes = 0;
 /** 켜 두면 상세 조회의 응답을 `release` 까지 붙든다. */
 let holding = false;
 const held: Array<() => void> = [];
@@ -46,7 +50,7 @@ const post = () => ({
   writerNickname: '테스트닉',
   viewCount: views,
   commentCount: 0,
-  likeCount: 0,
+  likeCount: likes,
   liked: false,
   attachments: [],
   createdAt: '2026-10-27T09:00:00',
@@ -54,10 +58,10 @@ const post = () => ({
 
 const ROUTES: Routes = {
   'GET /api/v1/members/me': () => ok({ accountId: 7, nickname: '테스트닉' }),
-  // 서버처럼 상세 조회마다 조회수가 오른다.
+  // 조회자는 이 화면 하나다 — 같은 조회자의 재조회는 24시간 안이면 조회수를 올리지 않으므로 첫 조회만 센다.
   [DETAIL]: async () => {
     if (holding) await new Promise<void>((resolve) => held.push(resolve));
-    views += 1;
+    views = 1;
     return ok(post());
   },
   'GET /api/v1/posts/9/comments': () =>
@@ -123,6 +127,7 @@ beforeEach(() => {
   requests.length = 0;
   stored = { title: '처음 제목', category: 'QNA', content: '처음 본문' };
   views = 0;
+  likes = 0;
   holding = false;
   held.length = 0;
 });
@@ -189,12 +194,15 @@ describe('글 수정 — 입력칸을 채우는 때', () => {
     type(content, '고친 본문');
     type(category, 'FREE');
 
-    // 다시 받는다 — 조회수가 올라 앞의 응답과 다른 값이 온다. 결과는 곧바로 화면에 알린다(renderApp 의 스케줄러).
+    // 다시 받는다 — 그 사이 다른 계정이 그 글을 눌러 앞의 응답과 다른 값이 온다. 같은 값이면 쿼리가 앞의 응답을 그대로 두어
+    // 받은 값마다 덮는 코드도 덮을 것이 없다. 결과는 곧바로 화면에 알린다(renderApp 의 스케줄러).
+    likes += 1;
     const before = sent(DETAIL).length;
     await act(async () => {
       await queryClient.refetchQueries({ queryKey: ['post', '9'] });
     });
     expect(sent(DETAIL)).toHaveLength(before + 1);
+    expect(queryClient.getQueryData(['post', '9'])).toMatchObject({ likeCount: 1 });
     expect(title).toHaveValue('고친 제목');
     expect(content).toHaveValue('고친 본문');
     expect(category).toHaveValue('FREE');

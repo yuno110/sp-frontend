@@ -6,6 +6,7 @@ import {
   CONFIRM_EMAIL,
   CONFIRM_PASSWORD_RESET,
   EMAIL,
+  LIKE,
   LONG_WORD,
   MY_PROFILE,
   MY_PROFILE_WITHDRAWN,
@@ -21,6 +22,7 @@ import {
   WITHDRAWN_ID,
   categoryOf,
   fail,
+  likeState,
   ok,
   pageOf,
   type Routes,
@@ -61,6 +63,7 @@ interface Screen {
 const main = (page: Page) => page.getByRole('main');
 const shown = (page: Page, text: string) => expect(main(page).getByText(text, { exact: true }).first()).toBeVisible();
 const codeShown = (page: Page, code: string) => expect(page.locator(`[data-error-code="${code}"]`).first()).toBeVisible();
+const likeButton = (page: Page) => main(page).getByRole('button', { name: /^좋아요 \d+$/ });
 const panel = (page: Page, title: string) =>
   main(page).locator('section').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
 
@@ -477,6 +480,24 @@ const SCREENS: Screen[] = [
     path: '/posts/1',
     login: true,
     ready: (p) => expect(main(p).getByRole('button', { name: '등록' })).toBeVisible(),
+  },
+  {
+    route: '/posts/:id',
+    state: '상세 — 좋아요를 누름',
+    path: '/posts/1',
+    login: true,
+    api: { [LIKE]: likeState(true, 5) },
+    act: (p) => likeButton(p).click(),
+    ready: (p) => expect(likeButton(p)).toHaveAttribute('aria-pressed', 'true'),
+  },
+  {
+    route: '/posts/:id',
+    state: '상세 — 좋아요 실패',
+    path: '/posts/1',
+    login: true,
+    api: { [LIKE]: fail('P001') },
+    act: (p) => likeButton(p).click(),
+    ready: (p) => codeShown(p, 'P001'),
   },
   {
     route: '/posts/:id',

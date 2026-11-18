@@ -7,10 +7,12 @@ import { expect, test } from './fixtures.ts';
 
 /** 글 목록이 표로 바뀌는 폭 — Tailwind 의 `md` 다(src/components/PostTable.tsx). */
 const TABLE_FROM = 768;
+/** 표의 번호 칸을 그리는 폭 — Tailwind 의 `lg` 다. 까닭은 src/components/PostTable.tsx 의 주석이 적는다. */
+const NUMBER_FROM = 1024;
 /** 표의 제목 칸이 이보다 좁으면 제목이 몇 글자씩 줄을 바꾼다. */
 const TITLE_CELL_MIN = 200;
 
-test('글 목록 — 표가 보이는 폭마다 제목 칸이 넓고, 그보다 좁으면 줄 목록이다', async ({ page }) => {
+test('글 목록 — 표가 보이는 폭마다 제목 칸이 넓고, 그보다 좁으면 줄 목록이다. 표의 번호 칸은 1024px 부터다', async ({ page }) => {
   await page.goto('/posts');
   const main = page.getByRole('main');
   await expect(main.getByRole('link', { name: '짧은 글' }).first()).toBeVisible();
@@ -23,6 +25,8 @@ test('글 목록 — 표가 보이는 폭마다 제목 칸이 넓고, 그보다 
     const isTable = await table.isVisible();
     expect.soft(isTable, `${width}px — 표인가`).toBe(width >= TABLE_FROM);
     expect.soft(await list.isVisible(), `${width}px — 줄 목록인가`).toBe(width < TABLE_FROM);
+    const number = table.getByRole('columnheader', { name: '번호', exact: true });
+    expect.soft(await number.isVisible(), `${width}px — 번호 칸이 보이는가`).toBe(width >= NUMBER_FROM);
     if (isTable) {
       const cell = await table.getByRole('columnheader', { name: '제목' }).boundingBox();
       expect.soft(cell?.width ?? 0, `${width}px — 제목 칸의 폭`).toBeGreaterThanOrEqual(TITLE_CELL_MIN);

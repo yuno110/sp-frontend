@@ -2,6 +2,7 @@ import http, { unwrap } from '@/lib/api/client';
 import type { ApiResponse, Page } from '@/lib/api/types';
 import type {
   Comment,
+  LikeState,
   PathId,
   PostCategory,
   PostDetail,
@@ -74,6 +75,18 @@ export function updatePost(id: PathId, title: string, content: string, category:
 
 export function deletePost(id: PathId) {
   return http.delete(`/api/v1/posts/${id}`);
+}
+
+/**
+ * 좋아요 — `PUT` 이 누르고 `DELETE`(`unlikePost`)가 취소한다. 둘 다 멱등이고 본문이 없으며, 응답은 그 요청 뒤의 상태다(§4.6). 인증이
+ * 필요하고 프로필은 필요 없다 — `S002` 가 나지 않는다. 없는·삭제된 글은 404 `P001` 이다.
+ */
+export function likePost(id: PathId) {
+  return unwrap(http.put<ApiResponse<LikeState>>(`/api/v1/posts/${id}/like`));
+}
+
+export function unlikePost(id: PathId) {
+  return unwrap(http.delete<ApiResponse<LikeState>>(`/api/v1/posts/${id}/like`));
 }
 
 /** 없는 게시글의 댓글 목록은 404 `P001` 이다 — 빈 페이지 200 이 아니다(§4.5). */

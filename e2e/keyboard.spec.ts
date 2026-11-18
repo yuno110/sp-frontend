@@ -1,6 +1,7 @@
 import {
   CONFIRM_EMAIL,
   CONFIRM_PASSWORD_RESET,
+  LIKE,
   LINK_TOKEN,
   ME,
   MY_PROFILE,
@@ -8,10 +9,13 @@ import {
   NOTICE_POST,
   NO_CONTENT,
   OTHER_POST,
+  POST,
   REQUEST_PASSWORD_RESET,
   RESET_LINK,
+  UNLIKE,
   VERIFY_LINK,
   fail,
+  likeState,
   ok,
   pageOf,
   tokens,
@@ -21,10 +25,11 @@ import { expect, test } from './fixtures.ts';
 
 /**
  * 가입·로그인·글 작성을 키보드만으로 끝낸다 (sp-docs/plan/phase2.md §7.2 F-05). 글 목록의 카테고리 탭도 키보드로 고른다(F-12).
- * 비밀번호 재설정 — 찾기에서 메일을 요청하고 메일의 링크로 새 비밀번호를 내는 흐름도 키보드로 끝낸다(F-09).
+ * 비밀번호 재설정 — 찾기에서 메일을 요청하고 메일의 링크로 새 비밀번호를 내는 흐름도 키보드로 끝낸다(F-09). 글 상세의 좋아요도
+ * 키보드로 누르고 취소한다(F-13).
  *
- * 포커스는 Tab 으로만 옮기고 제출은 Enter 로 한다. 탭 버튼은 Space 와 Enter 로 누른다. 입력칸은 라벨 이름으로 찾는다 — 화면을
- * 읽어 주는 도구가 그 이름을 읽는다.
+ * 포커스는 Tab 으로만 옮기고 제출은 Enter 로 한다. 탭 버튼과 좋아요 버튼은 Space 와 Enter 로 누른다. 입력칸은 라벨 이름으로 찾는다 —
+ * 화면을 읽어 주는 도구가 그 이름을 읽는다.
  * Tab 으로 지나는 요소마다 `outline`·`box-shadow` 계산값이 포커스 전과 달라야 한다(e2e/checks.ts 의 `tabTo`).
  */
 
@@ -241,4 +246,46 @@ test('글 목록 — 카테고리 탭에 Tab 으로 닿고 Space·Enter 로 고�
   await expect(tab('질문')).toHaveAttribute('aria-pressed', 'true');
   await expect(rows.filter({ hasText: OTHER_POST.title })).toBeVisible();
   await expect(rows.filter({ hasText: NOTICE_POST.title })).toHaveCount(0);
+});
+
+test('글 상세 — 좋아요에 Tab 으로 닿고 Enter 로 누르고 Space 로 취소한다. 응답을 기다리는 동안과 그 뒤에도 포커스가 버튼에 남는다', async ({
+  page,
+  api,
+}) => {
+  await api.login();
+  let release!: () => void;
+  const answered = new Promise<void>((resolve) => (release = resolve));
+  api.use({
+    [LIKE]: async () => {
+      await answered;
+      return likeState(true, 5);
+    },
+    [UNLIKE]: likeState(false, 4),
+  });
+  await page.goto('/posts/1');
+  const like = page.getByRole('main').getByRole('button', { name: /^좋아요 \d+$/ });
+  await expect(like).toHaveAttribute('aria-pressed', 'false');
+
+  await tabTo(page, like);
+  await page.keyboard.press('Enter');
+  // 기다리는 동안 버튼은 aria-disabled 다 — `disabled` 면 포커스를 잃어 다음 키가 버튼에 닿지 않는다.
+  await expect(like).toHaveAttribute('aria-disabled', 'true');
+  await expect(like).toBeFocused();
+  // 기다리는 동안은 누르기 전의 상태와 수다 — 화면이 셈해 미리 바꾸지 않는다.
+  await page.waitForTimeout(300);
+  await expect(like).toHaveAttribute('aria-pressed', 'false');
+  await expect(like).toHaveText(`좋아요 ${POST.likeCount}`);
+  release();
+  await expect(like).toHaveAttribute('aria-pressed', 'true');
+  await expect(like).toHaveText('좋아요 5');
+  await expect(like).toBeFocused();
+
+  await page.keyboard.press('Space');
+  await expect(like).toHaveAttribute('aria-pressed', 'false');
+  await expect(like).toHaveText('좋아요 4');
+  await expect(like).toBeFocused();
+  expect(api.sent.filter((s) => s.key === LIKE || s.key === UNLIKE)).toEqual([
+    { key: LIKE, body: null },
+    { key: UNLIKE, body: null },
+  ]);
 });

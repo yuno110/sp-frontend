@@ -33,11 +33,22 @@ export interface PostListItem {
 }
 
 /**
- * 상세 — 목록 항목의 키에 `content` 를 더한 것. 쓰기 응답도 같은 모양이다(§4.4). §4.3 의 상세 키 가운데 `liked`·`attachments` 는 이
+ * 상세 — 목록 항목의 키에 `content`·`liked` 를 더한 것. 쓰기 응답도 같은 모양이다(§4.4). §4.3 의 상세 키 가운데 `attachments` 는 이
  * 화면이 읽지 않으므로 두지 않는다.
  */
 export interface PostDetail extends PostListItem {
   content: string;
+  /**
+   * 요청에 실린 Access Token 의 계정이 이 글을 눌렀는가. 토큰 없이 받았으면 `null` 이다 — 「누구인지 모른다」 이고 `false`(누르지
+   * 않았다)와 다르다(§4.3).
+   */
+  liked: boolean | null;
+}
+
+/** 좋아요의 응답 — 그 요청 뒤의 상태다. `PUT` 이면 `liked` 가 언제나 `true`, `DELETE` 면 언제나 `false` 다(§4.6). */
+export interface LikeState {
+  liked: boolean;
+  likeCount: number;
 }
 
 /** 댓글 — 목록·작성·수정이 같은 모양이다(§4.5). */

@@ -52,8 +52,9 @@ export function PostFormPage({ mode }: { mode: 'create' | 'edit' }) {
   });
 
   // 고칠 글은 이 화면이 열린 뒤 받은 값으로 한 번만 채운다. 상세가 받아 둔 값(같은 조회의 캐시)으로는 채우지 않는다 — 그 사이
-  // 바뀌었으면 옛 글을 고쳐 저장하게 된다. 채운 뒤 다시 받은 값으로는 덮지 않는다 — 상세 조회는 조회수를 올려 받을 때마다 새
-  // 값이라, 덮으면 입력한 것이 사라지고 옛 값이 저장된다(F-06 측정).
+  // 바뀌었으면 옛 글을 고쳐 저장하게 된다. 채운 뒤 다시 받은 값으로는 덮지 않는다 — 다시 받은 값은 그 사이 다른 계정의 좋아요나
+  // 다른 조회자의 조회로 앞의 값과 다를 수 있고, 덮으면 입력한 것이 사라지고 옛 값이 저장된다(F-06 측정). F-06 이 잰 때는 상세
+  // 조회마다 조회수가 올라 받을 때마다 달랐다 — B-21 뒤 같은 조회자의 재조회는 조회수를 올리지 않는다(sp-docs/requirements/board.md §9.2).
   const received = existing.isFetchedAfterMount && existing.isSuccess ? existing.data : undefined;
   useEffect(() => {
     if (!received || filledFor === postId) return;

@@ -30,7 +30,7 @@ export const queryClient = new QueryClient(config);
  * 들어가지 않는다. 재발급은 같은 세션이 이어지는 것이라 지우지 않는다.
  *
  * 토큰 없이 있다가 토큰 없이 끝난 세션(되살리지 못한 새로고침)은 지우지 않는다 — 토큰 없이 받은 것은 어느 세션의 것도 아니고, 지우면 공개
- * 화면이 같은 조회를 다시 보낸다. 글 상세는 조회할 때마다 조회수가 오른다.
+ * 화면이 같은 조회를 다시 보낸다.
  */
 useAuthStore.subscribe((now, before) => {
   if (now.sessionGeneration === before.sessionGeneration) return;
