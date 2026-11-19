@@ -24,6 +24,7 @@ export const ROUTES = [
   '/members/me',
   '/members/:accountId',
   '/me',
+  '/admin/members',
   '/*',
 ] as const;
 

@@ -11,6 +11,7 @@ import { PostFormPage } from '@/pages/PostFormPage';
 import { MyPostsPage } from '@/pages/MyPostsPage';
 import { MyPage } from '@/pages/MyPage';
 import { MemberProfilePage } from '@/pages/MemberProfilePage';
+import { AdminMembersPage } from '@/pages/AdminMembersPage';
 import { TokenLabPage } from '@/pages/TokenLabPage';
 import { DEV_ONLY } from '@/lib/devOnly';
 import { useAuthStore } from '@/stores/authStore';
@@ -120,6 +121,17 @@ export const router = createBrowserRouter([
         element: (
           <RequireToken>
             <MyPage />
+          </RequireToken>
+        ),
+      },
+      // 관리자 회원 목록(F-11). 보호된 경로다 — 두 조회가 모두 인증 요청이다. ADMIN 인지는 두 서비스가 판정하고(403 A004) 이 라우트는
+      // 가리지 않는다 — USER 토큰으로 열면 그 거부가 화면에 보인다(sp-docs/security.md §5.1). `members/:accountId` 와 겹치지 않게
+      // `admin` 아래에 둔다.
+      {
+        path: 'admin/members',
+        element: (
+          <RequireToken>
+            <AdminMembersPage />
           </RequireToken>
         ),
       },

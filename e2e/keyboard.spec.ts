@@ -1,4 +1,6 @@
 import {
+  ACCOUNTS_LIST,
+  ADMIN,
   CONFIRM_EMAIL,
   CONFIRM_PASSWORD_RESET,
   LIKE,
@@ -26,7 +28,8 @@ import { expect, test } from './fixtures.ts';
 /**
  * 가입·로그인·글 작성을 키보드만으로 끝낸다 (sp-docs/plan/phase2.md §7.2 F-05). 글 목록의 카테고리 탭도 키보드로 고른다(F-12).
  * 비밀번호 재설정 — 찾기에서 메일을 요청하고 메일의 링크로 새 비밀번호를 내는 흐름도 키보드로 끝낸다(F-09). 글 상세의 좋아요도
- * 키보드로 누르고 취소한다(F-13).
+ * 키보드로 누르고 취소한다(F-13). 회원 목록의
+ * 정렬·거르기·검색·페이지 이동도 키보드로 한다(F-11).
  *
  * 포커스는 Tab 으로만 옮기고 제출은 Enter 로 한다. 탭 버튼과 좋아요 버튼은 Space 와 Enter 로 누른다. 입력칸은 라벨 이름으로 찾는다 —
  * 화면을 읽어 주는 도구가 그 이름을 읽는다.
@@ -140,6 +143,9 @@ test('비밀번호 재설정 — 로그인 화면에서 찾기로 가 메일을 
   await tabTo(page, main.getByRole('link', { name: '비밀번호 찾기', exact: true }));
   await page.keyboard.press('Enter');
   await page.waitForURL((url) => url.pathname === '/reset-password/request');
+  // 주소가 바뀐 뒤에도 로그인 화면이 잠깐 남는다 — 그 화면에도 「이메일」 입력칸이 있어 그것을 잡으면 포커스 전의 모습을 다른 요소에서
+  // 찍는다(2026-11-19 F-11 의 전체 실행에서 두 번 났다). 이 화면에만 있는 버튼이 그려진 뒤에 간다.
+  await expect(main.getByRole('button', { name: '재설정 메일 보내기', exact: true })).toBeVisible();
   await tabTo(page, main.getByLabel('이메일', { exact: true }));
   await page.keyboard.type(EMAIL);
   await tabTo(page, main.getByRole('button', { name: '재설정 메일 보내기', exact: true }));
@@ -288,4 +294,62 @@ test('글 상세 — 좋아요에 Tab 으로 닿고 Enter 로 누르고 Space �
     { key: LIKE, body: null },
     { key: UNLIKE, body: null },
   ]);
+});
+
+test('회원 목록 — 정렬·역할을 화살표로 고르고, 이메일 검색을 Enter 로 걸고, 다음 페이지를 Enter 로 연다', async ({ page, api }) => {
+  // 두 페이지가 되는 서버 — 요청의 `page` 로 자른다(sp-docs/api-contract.md §2.5·§7.1).
+  const accounts = Array.from({ length: 25 }, (_, i) => ({
+    id: 100 - i,
+    email: `user${i}@example.com`,
+    role: 'USER',
+    deleted: false,
+    createdAt: '2026-10-27T08:00:00',
+    emailVerified: true,
+    locked: false,
+  }));
+  api.use({
+    [ACCOUNTS_LIST]: (request) => {
+      const page = Number(new URL(request.url()).searchParams.get('page') ?? 0);
+      return ok({
+        ...pageOf(accounts.slice(page * 20, (page + 1) * 20), 20),
+        page,
+        totalElements: accounts.length,
+        totalPages: 2,
+        first: page === 0,
+        last: page === 1,
+      });
+    },
+  });
+  await api.login(ADMIN);
+  await page.goto('/admin/members');
+  const main = page.getByRole('main');
+  await expect(main.getByRole('table').getByText('user0@example.com')).toBeVisible();
+  /** 다음에 나가는 계정 목록 요청의 쿼리. */
+  const nextQuery = () =>
+    page
+      .waitForRequest((r) => new URL(r.url()).pathname === '/api/v1/accounts')
+      .then((r) => Object.fromEntries(new URL(r.url()).searchParams));
+
+  await tabTo(page, main.getByRole('combobox', { name: '정렬' }));
+  let query = nextQuery();
+  await page.keyboard.press('ArrowDown');
+  expect(await query).toEqual({ page: '0', size: '20', sort: 'email' });
+
+  await tabTo(page, main.getByRole('combobox', { name: '역할' }));
+  query = nextQuery();
+  await page.keyboard.press('ArrowDown');
+  expect(await query).toEqual({ page: '0', size: '20', sort: 'email', role: 'ADMIN' });
+
+  await tabTo(page, main.getByRole('textbox', { name: '이메일 검색어' }));
+  await page.keyboard.type('example');
+  query = nextQuery();
+  await page.keyboard.press('Enter');
+  expect(await query).toEqual({ page: '0', size: '20', sort: 'email', role: 'ADMIN', email: 'example' });
+
+  await expect(main.getByRole('table').getByText('user0@example.com')).toBeVisible();
+  await tabTo(page, main.getByRole('button', { name: /다음/ }));
+  query = nextQuery();
+  await page.keyboard.press('Enter');
+  expect(await query).toEqual({ page: '1', size: '20', sort: 'email', role: 'ADMIN', email: 'example' });
+  await expect(main.getByRole('table').getByText('user20@example.com')).toBeVisible();
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { internalCopyIn } from '@/test/internalCopy';
 import { plainEndingsIn } from '@/test/plainEnding';
 import {
+  ADMIN_ONLY,
   AFTER_WITHDRAWAL,
   EMAIL_VERIFICATION,
   ERROR_CODES,
@@ -54,6 +55,7 @@ describe('코드 사전', () => {
         ...Object.keys(AFTER_WITHDRAWAL),
         ...Object.keys(EMAIL_VERIFICATION),
         ...Object.keys(PASSWORD_RESET),
+        ...Object.keys(ADMIN_ONLY),
       ]),
     );
   });
@@ -67,6 +69,7 @@ describe('사용자 문장', () => {
     ...Object.entries(AFTER_WITHDRAWAL).map(([code, s]) => [`${code} (계정 탈퇴 뒤)`, s.text] as const),
     ...Object.entries(EMAIL_VERIFICATION).map(([code, s]) => [`${code} (이메일 인증 확인)`, s.text] as const),
     ...Object.entries(PASSWORD_RESET).map(([code, s]) => [`${code} (비밀번호 재설정 확인)`, s.text] as const),
+    ...Object.entries(ADMIN_ONLY).map(([code, s]) => [`${code} (회원 목록)`, s.text] as const),
     ['응답 없음', NO_RESPONSE] as const,
     ['오류 응답이 아닌 실패', UNEXPECTED] as const,
   ];

@@ -22,6 +22,12 @@ const NAV = [
 ];
 
 /**
+ * 토큰의 `role` 이 ADMIN 일 때만 그린다 — 표시 편의이고 판정은 서버다(sp-docs/security.md §5.1, CLAUDE.md 「경계」). 다른 토큰으로 주소를
+ * 쳐서 열면 그 화면이 403 A004 를 보인다(pages/AdminMembersPage.tsx).
+ */
+const ADMIN_NAV = { to: '/admin/members', label: '회원 관리' };
+
+/**
  * 닉네임은 member 에서 온다 — JWT claim 에 `nickname` 이 없다(api-contract.md §6).
  * 그래서 로그인한 상태의 머리글 한 줄에도 **두 서비스가 필요하다.**
  */
@@ -130,7 +136,7 @@ export function Layout() {
         <span className="text-lg font-bold text-default">게시판</span>
 
         <nav className="ml-4 flex items-center gap-1">
-          {NAV.map((item) => (
+          {(loggedIn && role === 'ADMIN' ? [...NAV, ADMIN_NAV] : NAV).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

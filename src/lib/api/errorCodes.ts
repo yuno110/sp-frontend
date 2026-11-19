@@ -136,6 +136,15 @@ export const PASSWORD_RESET: Meanings = {
 };
 
 /**
+ * 회원 목록의 두 조회(`GET /api/v1/accounts`, `GET /api/v1/members?accountIds=`) — 403 `A004` 는 ADMIN 이 아닌 토큰이다(api-contract.md §2.5·§3.2).
+ * 기본 뜻(「이 작업을 할 권한이 없습니다」)은 누른 동작을 말하지만 이 화면은 열기만 했으므로 화면을 말한다. 판정은 서버다 — 머리글 링크를
+ * 가리는 것은 편의다(security.md §5.1). 회원 목록 화면(pages/AdminMembersPage.tsx)이 넘긴다.
+ */
+export const ADMIN_ONLY: Meanings = {
+  A004: { text: '관리자만 볼 수 있는 화면입니다.' },
+};
+
+/**
  * `C009`(요청 수 제한, api-contract.md §8.1)의 문장 — 어느 화면이든 이것 하나다(lib/api/client.ts 의 `describeError`).
  * `retryAfter` 는 응답의 `Retry-After` 초다. 있으면 그 초를 말하고, 없으면 사전의 기본 문장이다 — 코드는 어느 쪽이든 코드 자리에
  * 남는다. 한 시간 창의 제한은 수천 초가 될 수 있어(security.md §10) 60초부터는 분과 초로 말한다.

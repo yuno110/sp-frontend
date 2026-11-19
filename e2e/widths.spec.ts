@@ -1,3 +1,5 @@
+import type { Locator } from '@playwright/test';
+import { ADMIN, EMAIL } from './api.ts';
 import { expect, test } from './fixtures.ts';
 
 /**
@@ -52,4 +54,39 @@ test('글 상세 — 좁은 폭에서 제목이 전체 폭을 쓰고 버튼은 �
   const [wideTitle, wideButton] = await Promise.all([heading.boundingBox(), remove.boundingBox()]);
   expect(wideButton?.x ?? 0, '1280px — 버튼은 제목 옆이다').toBeGreaterThanOrEqual((wideTitle?.x ?? 0) + (wideTitle?.width ?? 0));
   expect(wideButton?.y ?? 0, '1280px — 버튼은 제목과 같은 높이에서 시작한다').toBeLessThan((wideTitle?.y ?? 0) + (wideTitle?.height ?? 0));
+});
+
+/** 요소 안의 글자가 몇 줄에 걸쳐 그려졌는가 — 글자의 줄 상자 위치를 센다. */
+const linesOf = (target: Locator) =>
+  target.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return new Set([...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size;
+  });
+
+test('회원 목록 — 역할과 상태 배지가 낱말 안에서 줄을 바꾸지 않는다. 긴 이메일은 칸 안에서 줄을 바꾼다', async ({ page, api }) => {
+  // 표 머리·버튼은 e2e/screens.spec.ts 의 쪼개진 낱말 검사가 보지만 표의 칸은 라벨 자리가 아니라 그 검사 밖이다.
+  await api.login(ADMIN);
+  await page.goto('/admin/members');
+  const main = page.getByRole('main');
+  await expect(main.getByText('프로필 없음').first()).toBeVisible();
+  const table = main.getByRole('table');
+  const list = main.getByRole('list');
+
+  for (const width of [360, 640, 768, 1024, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    const view = width >= TABLE_FROM ? table : list;
+    await expect(view).toBeVisible();
+    // 상태 칸에 배지 셋(인증됨·잠김·탈퇴)이 모이는 줄과 「미인증」 이 있는 줄, 역할 「관리자」 다. 닉네임은 그 낱말과 겹치지 않게 둔다(e2e/api.ts).
+    for (const word of ['관리자', '인증됨', '잠김', '탈퇴', '미인증']) {
+      for (const target of await view.getByText(word, { exact: true }).all()) {
+        expect.soft(await linesOf(target), `${width}px — 「${word}」 가 한 줄인가`).toBe(1);
+      }
+    }
+    const email = view.getByText(EMAIL, { exact: true });
+    const [box, cell] = await Promise.all([email.boundingBox(), main.boundingBox()]);
+    expect.soft((box?.x ?? 0) + (box?.width ?? 0), `${width}px — 이메일이 본문 폭 안인가`).toBeLessThanOrEqual(
+      (cell?.x ?? 0) + (cell?.width ?? 0) + 0.5,
+    );
+  }
 });

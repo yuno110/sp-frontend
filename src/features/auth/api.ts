@@ -1,5 +1,5 @@
 import http, { requireTokens, unwrap } from '@/lib/api/client';
-import type { ApiResponse, TokenResponse } from '@/lib/api/types';
+import type { ApiResponse, Page, TokenResponse } from '@/lib/api/types';
 
 /**
  * auth-service. 정본은 sp-docs/api-contract.md §2 다.
@@ -141,4 +141,63 @@ export function changePassword(currentPassword: string, newPassword: string) {
 /** 탈퇴 1단계. 본문으로 비밀번호를 재확인한다. 이미 탈퇴했으면 검증 없이 204 다(§2.2). */
 export function withdrawAccount(password: string) {
   return http.delete('/api/v1/accounts/me', { data: { password } });
+}
+
+/** 계정의 역할 — `Role` 의 값이다(§2.5, §6). */
+export type AccountRole = 'USER' | 'ADMIN';
+
+/** 계정 목록의 정렬. 화이트리스트 enum 이다(§2.5) — `latest` 는 `created_at DESC, id DESC`, `email` 은 `email ASC, id ASC`. */
+export type AccountSort = 'latest' | 'email';
+
+/** 계정 목록의 최대 `size`. 넘으면 서버가 이 값으로 자른다(§2.5) — 프로필 일괄 조회의 상한과 같은 값이다(§3.2). */
+export const ACCOUNT_PAGE_SIZE_MAX = 50;
+
+/** 이메일 검색어의 최대 길이. 넘으면 400 `C001` 이다(§2.5). */
+export const ACCOUNT_EMAIL_FILTER_MAX = 100;
+
+/**
+ * 계정 목록의 원소 — 키는 §2.5 의 표다(§9.12). 비밀번호·인증 시각·잠금 시각은 오지 않는다 — 상태만 온다. 닉네임도 없다 — member 의
+ * 일괄 조회(features/member/api.ts 의 `getProfiles`)로 따로 받는다.
+ */
+export interface AccountSummary {
+  /** `account.id` (= `accountId`). member 의 일괄 조회에 넘기는 값이다. */
+  id: number;
+  email: string;
+  role: AccountRole;
+  deleted: boolean;
+  /** `account.created_at`. 오프셋 없음(§2.5). */
+  createdAt: string;
+  emailVerified: boolean;
+  /** 그 이메일의 로그인 잠금이 지금 걸려 있는가. */
+  locked: boolean;
+}
+
+export interface AccountListParams {
+  page: number;
+  size: number;
+  sort: AccountSort;
+  /** 부분 일치. 공백뿐이면 보내지 않는다 — 서버도 그때 없음으로 본다(§2.5). */
+  email?: string;
+  /** 없으면 두 역할 모두다. */
+  role?: AccountRole;
+  /** 없으면 탈퇴 여부와 상관없이 둘 다다. */
+  deleted?: boolean;
+}
+
+/**
+ * 계정 목록 (ADMIN). ADMIN 이 아니면 403 `A004` 다 — 판정은 서버의 Service 계층이다(§2.5, security.md §5.1). 정하지 않은 조건은 보내지
+ * 않는다. `email` 은 앞뒤 공백을 잘라 보낸다 — 서버는 공백뿐인 값만 「없음」 으로 보고 그 밖의 값은 자르지 않으므로(§2.5) 자르는 것은 이
+ * 화면의 결정이다. 붙여 넣은 검색어의 앞뒤 공백이 결과를 비우지 않게 한다.
+ */
+export function listAccounts(params: AccountListParams) {
+  const query: Record<string, string | number | boolean> = {
+    page: params.page,
+    size: params.size,
+    sort: params.sort,
+  };
+  const email = params.email?.trim();
+  if (email) query.email = email;
+  if (params.role) query.role = params.role;
+  if (params.deleted !== undefined) query.deleted = params.deleted;
+  return unwrap(http.get<ApiResponse<Page<AccountSummary>>>('/api/v1/accounts', { params: query }));
 }

@@ -146,11 +146,22 @@
 - **글 목록은 표에 「좋아요」 칸을, 좁은 화면의 줄 목록에 「좋아요 N」 을 둔다**(`components/PostTable.tsx`). 칸을 더하자 768px 에서 제목 칸이 175px 이 되어(2026-11-17 측정, `e2e/widths.spec.ts` 의 하한은 200px) 표의 번호 칸을 `lg`(1024px)부터 그린다 — 번호는 줄 목록도 빼는 값이다. 그 폭부터만 보이는지는 `e2e/widths.spec.ts` 가 본다
 - 키보드로 닿고 누르는 것은 `e2e/keyboard.spec.ts` 가 본다 — Tab 으로 닿고 Enter 로 누르고 Space 로 취소하며, 기다리는 동안과 그 뒤에도 포커스가 버튼에 남는다
 
+## 관리자 회원 목록
+
+ADMIN 이 계정과 프로필을 함께 본다. 규칙은 `sp-docs/requirements/member.md` §13, 요청과 응답은 `sp-docs/api-contract.md` §2.5·§3.2·§9.12 다. 화면의 결정은 2026-11-19 `F-11` 이 정했다. 검증 표는 `src/pages/adminMembers.test.tsx` 와 `e2e/screens.spec.ts` 의 `/admin/members` 상태가 밟는다.
+
+- **경로는 `/admin/members` 이고 보호된 경로다**(`src/router.tsx`) — 두 조회가 모두 인증 요청이다. `members/:accountId` 와 겹치지 않게 `admin` 아래에 둔다. **라우트는 `role` 로 가리지 않는다** — ADMIN 판정은 auth·member 가 하고(`sp-docs/security.md` §5.1) 그 거부가 화면에 보여야 한다. USER 토큰으로 열면 403 `A004` 가 오류 상자에 보인다
+- **머리글의 「회원 관리」 링크는 토큰의 `role` 이 ADMIN 일 때만 그린다 — 편의이고 판정은 서버다**(`components/Layout.tsx` 의 `ADMIN_NAV`, 「경계」). 이 화면의 `A004` 는 `errorCodes.ts` 의 `ADMIN_ONLY` 로 화면을 말한다 — 기본 뜻은 누른 동작을 말하지만 이 화면은 열기만 했다. 코드는 그대로 남는다
+- **계정 한 페이지를 받고 그 페이지의 id 로 프로필을 한 번에 받는다**(`pages/AdminMembersPage.tsx`, `features/auth/api.ts` 의 `listAccounts`, `features/member/api.ts` 의 `getProfiles`). 계정마다 부르지 않는다. **페이지가 비면 일괄 조회를 부르지 않는다** — 빈 `accountIds` 는 400 `C001` 이다. 한 페이지는 20 건이라 일괄 조회의 상한(50) 안이다. `accountIds` 는 쉼표 목록으로 보낸다 — axios 의 배열 직렬화(`accountIds[]=`)는 §3.2 가 받는 모양이 아니다
+- **두 조회는 따로 묻는다** — 일괄 조회가 실패해도 계정의 줄은 그린다. 닉네임 칸은 받는 중(「…」)·받지 못함(「불러오지 못함」)·결과에 없음(「프로필 없음」)·받음 넷이고, 탈퇴한 프로필은 받은 닉네임에 「(프로필 탈퇴)」 를 붙인다. **받지 못함을 「프로필 없음」 으로 그리지 않는다** — 실패를 빈 결과처럼 다루면 실패를 숨긴다(불변식 9). 그 실패는 목록 위에 「닉네임을 불러오지 못했습니다.」 와 오류 상자로 보인다
+- **역할은 이름(관리자·일반)으로, 계정의 상태는 배지(인증됨·미인증·잠김·탈퇴)로 보인다.** 값(`ADMIN` 등)이 화면 문구에 나오면 문구 검사가 잡는다. 거르기(역할·탈퇴 여부)와 정렬을 바꾸거나 이메일 검색을 걸면 첫 페이지로 가고, 고르지 않은 조건은 보내지 않는다. 이메일 검색어는 앞뒤 공백을 잘라 보낸다 — 서버는 공백뿐인 값만 없음으로 보고 그 밖의 값은 자르지 않으므로(`sp-docs/api-contract.md` §2.5) 이 화면의 결정이다(`features/auth/api.ts` 의 `listAccounts`)
+- **실제 서비스 e2e 는 이 화면에 닿지 않는다** — 흐름의 계정은 화면으로 만든 USER 이고 ADMIN 의 자격을 어디서 받을지 정하지 않았다(`sp-docs/plan/phase2-frontend-integration.md` F-16 의 완료 기준). 이 화면은 스텁의 검증으로 남는다
+
 ## 접근성과 반응형
 
 브라우저 테스트(`pnpm test:e2e` — `e2e/` 에서 `e2e/live/` 를 뺀 것)가 잰다(`sp-docs/plan/phase2.md` §7.2 `F-05`). **프로덕션 빌드를 `vite preview` 로 3000 번에 띄워 잰다** — 개발 서버를 재면 개발 전용 표시가 섞이고, CSP 는 빌드에만 있다. API 는 테스트가 스텁으로 답하고(`e2e/api.ts` — 경로와 응답 모양은 `sp-docs/api-contract.md` 에서 온다) 백엔드는 띄우지 않는다.
 
-- **잰 것** — 개발 전용이 아닌 라우트마다 상태를 열어(`e2e/screens.spec.ts`) axe-core 의 serious·critical 위반이 없는지(기본 폭과 360px), 360px 폭과 레이아웃이 바뀌는 폭(`sm` 의 640px, 글 목록이 표로 바뀌는 `md` 의 768px)에서 문서와 스크롤 컨테이너에 가로 스크롤이 없는지, 그 폭들에서 라벨 자리(머리글·버튼·표 머리·입력칸 라벨 — `e2e/checks.ts` 의 `brokenWords`)의 낱말이 줄에서 쪼개지지 않는지 본다. 넘치지 않아도 칸이 좁아 제목을 읽기 어려운 것은 위 검사가 잡지 못한다 — 글 목록의 제목 칸과 글 상세의 제목 줄은 `e2e/widths.spec.ts` 가 잰다. 가입·로그인·비밀번호 재설정·글 작성은 Tab·Enter 로 끝내고, 글 상세의 좋아요는 Tab 으로 닿아 Enter·Space 로 누르고 취소하며, Tab 으로 지나는 요소마다 `outline`·`box-shadow` 가 포커스 전과 달라야 한다(`e2e/keyboard.spec.ts`). **CSP 위반은 `e2e/fixtures.ts` 의 `cspTest` 위에 선 테스트마다 끝날 때 본다** — 콘솔과 `securitypolicyviolation` 이벤트 둘로. 스텁으로 답하는 테스트는 그 파일의 `test` 를, 실제 서비스를 치는 테스트는 `e2e/live/fixtures.ts` 의 `test` 를 쓰고 둘 다 `cspTest` 위에 선다. 브라우저 테스트를 더하면 둘 중 하나를 쓴다
+- **잰 것** — 개발 전용이 아닌 라우트마다 상태를 열어(`e2e/screens.spec.ts`) axe-core 의 serious·critical 위반이 없는지(기본 폭과 360px), 360px 폭과 레이아웃이 바뀌는 폭(`sm` 의 640px, 글 목록이 표로 바뀌는 `md` 의 768px)에서 문서와 스크롤 컨테이너에 가로 스크롤이 없는지, 그 폭들에서 라벨 자리(머리글·버튼·표 머리·입력칸 라벨 — `e2e/checks.ts` 의 `brokenWords`)의 낱말이 줄에서 쪼개지지 않는지 본다. 넘치지 않아도 칸이 좁아 제목을 읽기 어려운 것은 위 검사가 잡지 못한다 — 글 목록의 제목 칸과 글 상세의 제목 줄은 `e2e/widths.spec.ts` 가 잰다. 표의 칸은 라벨 자리가 아니라 그 검사 밖이라, 회원 목록의 역할과 상태 배지가 낱말 안에서 줄을 바꾸지 않는지도 그 파일이 잰다. 가입·로그인·비밀번호 재설정·글 작성은 Tab·Enter 로 끝내고, 글 상세의 좋아요는 Tab 으로 닿아 Enter·Space 로 누르고 취소하고, 회원 목록은 정렬·역할을 화살표로 고르고 검색과 다음 페이지를 Enter 로 하며, Tab 으로 지나는 요소마다 `outline`·`box-shadow` 가 포커스 전과 달라야 한다(`e2e/keyboard.spec.ts`). **CSP 위반은 `e2e/fixtures.ts` 의 `cspTest` 위에 선 테스트마다 끝날 때 본다** — 콘솔과 `securitypolicyviolation` 이벤트 둘로. 스텁으로 답하는 테스트는 그 파일의 `test` 를, 실제 서비스를 치는 테스트는 `e2e/live/fixtures.ts` 의 `test` 를 쓰고 둘 다 `cspTest` 위에 선다. 브라우저 테스트를 더하면 둘 중 하나를 쓴다
 - **검사마다 위반을 일부러 만든 화면에서 잡히는 것을 보인다**(`e2e/controls.spec.ts`). 검사를 고치면 그 대조도 함께 본다 — 아무것도 잡지 못하는 검사는 "위반이 없다" 를 검사가 틀려도 낸다
 - **라우트를 더하거나 바꾸면 `e2e/routes.ts` 와 그 라우트의 상태(`e2e/screens.spec.ts`)를 함께 고친다.** 목록이 라우터와 같은지는 `src/router.test.tsx` 가, 라우트마다 잰 상태가 있는지와 상태마다 연 주소가 그 라우트에 걸리는지(라우터의 `matchRoutes` 로 맞춘다)는 `e2e/screens.spec.ts` 가 본다. 상태가 갈리는 화면(빈 목록·오류 상자·필드 오류 등)을 더하면 그 상태도 더한다 — 열지 않은 상태는 재지 않은 것이다
 - **스텁으로는 CORS 를 재지 못한다.** 가로채기를 켜면 preflight 에 Playwright 가 직접 답한다 — 아래 「실제 서비스와의 e2e」가 본다

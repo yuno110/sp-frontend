@@ -41,6 +41,7 @@ const ERRORS = {
   C005: { status: 500, message: '서버 내부 오류가 발생했습니다.' },
   C009: { status: 429, message: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.' },
   A002: { status: 401, message: '유효하지 않은 토큰입니다.' },
+  A004: { status: 403, message: '권한이 없습니다.' },
   M001: { status: 404, message: '프로필을 찾을 수 없습니다.' },
   M007: { status: 409, message: '탈퇴한 프로필입니다.' },
   P001: { status: 404, message: '게시글을 찾을 수 없습니다.' },
@@ -219,6 +220,42 @@ export const MY_PROFILE_WITHDRAWN: Routes = {
   }),
 };
 
+/**
+ * 회원 목록(F-11)의 계정 한 페이지 — 키는 §2.5 의 표다(§9.12). 입력 제약 끝의 이메일(관리자), 프로필이 없는 계정, 탈퇴한 계정(프로필도
+ * 탈퇴), 잠기고 인증하지 않은 계정이다 — 상태 칸의 배지 셋이 한 줄에 모인다.
+ */
+export const ACCOUNTS = [
+  { id: ADMIN.accountId, email: EMAIL, role: 'ADMIN', deleted: false, createdAt: '2026-09-11T10:00:00', emailVerified: true, locked: false },
+  { id: OTHER_ID, email: 'noprofile@example.com', role: 'USER', deleted: false, createdAt: '2026-10-02T10:00:00', emailVerified: true, locked: false },
+  { id: WITHDRAWN_ID, email: 'gone@example.com', role: 'USER', deleted: true, createdAt: '2026-10-01T08:59:00', emailVerified: true, locked: true },
+  { id: ME.accountId, email: 'locked@example.com', role: 'USER', deleted: false, createdAt: '2026-10-27T08:00:00', emailVerified: false, locked: true },
+];
+
+/** 일괄 조회가 아는 프로필 — `OTHER_ID` 는 프로필이 없다(가입 3단계 미완료). 탈퇴한 프로필은 공개 조회와 같은 모양이다(§3.1·§3.2). */
+const PROFILES = [
+  { accountId: ADMIN.accountId, nickname: '운영자', createdAt: '2026-09-11T10:05:00', deleted: false },
+  { accountId: ME.accountId, nickname: NICKNAME, createdAt: '2026-10-27T08:05:00', deleted: false },
+  { accountId: WITHDRAWN_ID, nickname: '탈퇴한 회원', createdAt: '2026-10-01T09:00:00', deleted: true },
+];
+
+/** 회원 목록의 두 조회(§2.5·§3.2). 쿼리는 키에 넣지 않는다. */
+export const ACCOUNTS_LIST = 'GET /api/v1/accounts';
+export const MEMBERS_BATCH = 'GET /api/v1/members';
+
+/**
+ * 일괄 조회의 답 — 요청의 `accountIds`(쉼표 목록이거나 같은 이름의 반복, §3.2)에 있는 프로필만 `accountId` 오름차순으로 준다. 없는 id 는
+ * 뺀다. 비었으면 400 `C001` 이다.
+ */
+export const membersOf: Answer = (request) => {
+  const ids = new URL(request.url())
+    .searchParams.getAll('accountIds')
+    .flatMap((value) => value.split(','))
+    .filter((value) => value !== '')
+    .map(Number);
+  if (ids.length === 0) return fail('C001');
+  return ok({ members: PROFILES.filter((p) => ids.includes(p.accountId)).sort((a, b) => a.accountId - b.accountId) });
+};
+
 /** 기본 답. 테스트가 `use` 로 덮는다. */
 const BASE: Routes = {
   'GET /api/v1/posts': listOf([NOTICE_POST, POST, OTHER_POST]),
@@ -229,6 +266,8 @@ const BASE: Routes = {
   'GET /api/v1/accounts/me': ok({ email: EMAIL, createdAt: '2026-10-27T08:00:00' }),
   [`GET /api/v1/members/${ME.accountId}`]: ok({ ...MY_PROFILE, createdAt: '2026-10-27T08:05:00', deleted: false }),
   // 탈퇴한 프로필도 200 이고 닉네임은 "탈퇴한 회원" 이다(§3.1).
+  [ACCOUNTS_LIST]: ok(pageOf(ACCOUNTS, 20)),
+  [MEMBERS_BATCH]: membersOf,
   [`GET /api/v1/members/${WITHDRAWN_ID}`]: ok({
     accountId: WITHDRAWN_ID,
     nickname: '탈퇴한 회원',

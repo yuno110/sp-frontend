@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import { matchRoutes } from 'react-router-dom';
 import {
+  ACCOUNTS_LIST,
   ADMIN,
   COMMENTS,
   CONFIRM_EMAIL,
@@ -8,6 +9,7 @@ import {
   EMAIL,
   LIKE,
   LONG_WORD,
+  MEMBERS_BATCH,
   MY_PROFILE,
   MY_PROFILE_WITHDRAWN,
   NICKNAME,
@@ -637,6 +639,47 @@ const SCREENS: Screen[] = [
     api: { 'POST /api/v1/auth/reissue': fail('A002') },
     lands: '/login',
     ready: (p) => codeShown(p, 'A002'),
+  },
+
+  // 회원 목록(F-11). 첫 상태는 입력 제약 끝의 이메일, 프로필 없음, 탈퇴한 프로필, 한 칸에 모인 배지 셋(인증됨·잠김·탈퇴)과 미인증을
+  // 담고, ADMIN 의 머리글에는 「회원 관리」 링크가 더해진다(e2e/api.ts 의 `ACCOUNTS`).
+  {
+    route: '/admin/members',
+    state: '프로필 없음·탈퇴·잠김·미인증이 섞인 페이지',
+    path: '/admin/members',
+    login: ADMIN,
+    ready: async (p) => {
+      await shown(p, '프로필 없음');
+      await shown(p, '미인증');
+      await expect(p.getByRole('banner').getByRole('link', { name: '회원 관리' })).toBeVisible();
+    },
+  },
+  {
+    route: '/admin/members',
+    state: '빈 페이지',
+    path: '/admin/members',
+    login: ADMIN,
+    api: { [ACCOUNTS_LIST]: ok(pageOf([], 20)) },
+    ready: (p) => shown(p, '계정이 없습니다'),
+  },
+  {
+    route: '/admin/members',
+    state: '닉네임을 받지 못함',
+    path: '/admin/members',
+    login: ADMIN,
+    api: { [MEMBERS_BATCH]: fail('C005') },
+    ready: async (p) => {
+      await codeShown(p, 'C005');
+      await shown(p, '불러오지 못함');
+    },
+  },
+  {
+    route: '/admin/members',
+    state: '관리자가 아님',
+    path: '/admin/members',
+    login: true,
+    api: { [ACCOUNTS_LIST]: fail('A004') },
+    ready: (p) => codeShown(p, 'A004'),
   },
 
   { route: '/*', state: '없는 주소', path: '/no-such-page', lands: '/posts', ready: (p) => shown(p, '짧은 글') },

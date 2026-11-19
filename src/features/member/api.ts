@@ -53,3 +53,19 @@ export function checkNickname(nickname: string) {
 export function getProfile(accountId: PathId) {
   return unwrap(http.get<ApiResponse<PublicProfile>>(`/api/v1/members/${accountId}`));
 }
+
+/**
+ * 프로필 일괄 조회 (ADMIN, §3.2). 원소는 `getProfile` 과 같은 모양이다 — 탈퇴한 프로필은 `"탈퇴한 회원"`·`deleted: true` 로 온다.
+ * **없는 `accountId` 는 결과에서 빠진다** — 프로필이 없는 계정(가입 3단계 미완료)이다. 그래서 이 함수의 실패를 빈 결과로 바꾸지 않는다 —
+ * 바꾸면 모든 계정이 「프로필 없음」 으로 보인다.
+ *
+ * `accountIds` 는 1개 이상 50개 이하다(§3.2). 비면 400 `C001` 이라 부르는 쪽이 부르지 않는다(pages/AdminMembersPage.tsx). 쉼표 목록으로
+ * 보낸다 — axios 의 배열 직렬화(`accountIds[]=`)는 §3.2 가 받는 모양이 아니다.
+ */
+export function getProfiles(accountIds: number[]) {
+  return unwrap(
+    http.get<ApiResponse<{ members: PublicProfile[] }>>('/api/v1/members', {
+      params: { accountIds: accountIds.join(',') },
+    }),
+  );
+}

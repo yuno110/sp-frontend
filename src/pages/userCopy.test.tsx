@@ -46,6 +46,7 @@ const SERVER_MESSAGE: Record<string, string> = {
   A001: '인증이 필요합니다.',
   A002: '유효하지 않은 토큰입니다.',
   A003: '만료된 토큰입니다.',
+  A004: '권한이 없습니다.',
   M001: '프로필을 찾을 수 없습니다.',
   M007: '탈퇴한 프로필입니다.',
   P001: '게시글을 찾을 수 없습니다.',
@@ -108,6 +109,25 @@ const pageOf = (content: unknown[]) => ({
   last: true,
 });
 
+/**
+ * 회원 목록(F-11)의 한 페이지 — 프로필이 있는 계정, 없는 계정, 탈퇴한 계정(프로필도 탈퇴), 잠긴 계정, 미인증 계정이다. 키는
+ * sp-docs/api-contract.md §2.5 의 표다(§9.12).
+ */
+const ADMIN_ACCOUNTS = [
+  { id: 1, email: 'admin@example.com', role: 'ADMIN', deleted: false, createdAt: '2026-09-11T10:00:00', emailVerified: true, locked: false },
+  { id: 2, email: 'noprofile@example.com', role: 'USER', deleted: false, createdAt: '2026-10-02T10:00:00', emailVerified: true, locked: false },
+  { id: 3, email: 'gone@example.com', role: 'USER', deleted: true, createdAt: '2026-10-01T08:59:00', emailVerified: true, locked: false },
+  { id: 4, email: 'locked@example.com', role: 'USER', deleted: false, createdAt: '2026-10-03T10:00:00', emailVerified: true, locked: true },
+  { id: 5, email: 'unverified@example.com', role: 'USER', deleted: false, createdAt: '2026-10-04T10:00:00', emailVerified: false, locked: false },
+];
+/** 그 페이지의 일괄 조회 — 2 는 프로필이 없어 빠진다(§3.2). */
+const ADMIN_MEMBERS = [
+  { accountId: 1, nickname: '관리자닉', createdAt: '2026-09-11T10:05:00', deleted: false },
+  { accountId: 3, nickname: '탈퇴한 회원', createdAt: '2026-10-01T09:00:00', deleted: true },
+  { accountId: 4, nickname: '잠긴닉', createdAt: '2026-10-03T10:05:00', deleted: false },
+  { accountId: 5, nickname: '미인증닉', createdAt: '2026-10-04T10:05:00', deleted: false },
+];
+
 const BASE: Routes = {
   'GET /api/v1/members/me': () => ok(PROFILE),
   'GET /api/v1/accounts/me': () => ok(ACCOUNT),
@@ -117,6 +137,8 @@ const BASE: Routes = {
   'GET /api/v1/posts/1': (config) => ok({ ...POST_DETAIL, liked: config.headers?.Authorization ? POST_DETAIL.liked : null }),
   'GET /api/v1/posts/1/comments': () => ok(pageOf([COMMENT])),
   'GET /api/v1/members/7': () => ok({ ...PROFILE, createdAt: '2026-10-27T09:00:00', deleted: false }),
+  'GET /api/v1/accounts': () => ok({ ...pageOf(ADMIN_ACCOUNTS), size: 20 }),
+  'GET /api/v1/members': () => ok({ members: ADMIN_MEMBERS }),
   'GET /api/v1/members/13': () =>
     ok({ accountId: 13, nickname: '탈퇴한 회원', createdAt: '2026-10-01T09:00:00', deleted: true }),
 };
@@ -914,6 +936,54 @@ const COPY_STATES: CopyState[] = [
       fireEvent.submit(main().querySelector('form')!);
       await waitFor(() => expect(linksTo('/signup', main())).toHaveLength(1));
     },
+  },
+  // 회원 목록(F-11) — 머리글의 「회원 관리」 링크도 이 상태에 있다.
+  {
+    name: '회원 목록 — 프로필 없음·탈퇴·잠김·미인증이 섞인 페이지',
+    path: '/admin/members',
+    as: ADMIN,
+    ready: () =>
+      Promise.all([
+        until(['관리자닉', '프로필 없음', '프로필 탈퇴', '잠김', '미인증', '회원 관리']),
+        until(['테스트닉'], banner),
+      ]),
+  },
+  {
+    name: '회원 목록 — 빈 페이지',
+    path: '/admin/members',
+    as: ADMIN,
+    extra: { 'GET /api/v1/accounts': () => ok({ ...pageOf([]), size: 20, totalPages: 0 }) },
+    ready: () => until(['계정이 없습니다'], main),
+  },
+  {
+    name: '회원 목록 — 조건에 맞는 계정이 없음',
+    path: '/admin/members',
+    as: ADMIN,
+    extra: {
+      'GET /api/v1/accounts': (config) =>
+        (config.params as { role?: string } | undefined)?.role
+          ? ok({ ...pageOf([]), size: 20, totalPages: 0 })
+          : ok({ ...pageOf(ADMIN_ACCOUNTS), size: 20 }),
+    },
+    ready: async () => {
+      await until(['관리자닉'], main);
+      fireEvent.change(screen.getByRole('combobox', { name: '역할' }), { target: { value: 'ADMIN' } });
+      await until(['조건에 맞는 계정이 없습니다'], main);
+    },
+  },
+  {
+    name: '회원 목록 — 닉네임을 받지 못함',
+    path: '/admin/members',
+    as: ADMIN,
+    extra: { 'GET /api/v1/members': () => fail(500, 'C005') },
+    ready: () => Promise.all([until(['닉네임을 불러오지 못했습니다.', '불러오지 못함'], main), errorShown()]),
+  },
+  {
+    name: '회원 목록 — 관리자가 아님',
+    path: '/admin/members',
+    as: ME,
+    extra: { 'GET /api/v1/accounts': () => fail(403, 'A004') },
+    ready: () => Promise.all([until(['관리자만 볼 수 있는 화면입니다.'], main), errorShown()]),
   },
 ];
 
