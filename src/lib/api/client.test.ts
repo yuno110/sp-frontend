@@ -1,7 +1,7 @@
-import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import { AxiosError, AxiosHeaders, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import http, { describeError, fieldMessages } from './client';
-import { ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE, UNEXPECTED } from './errorCodes';
+import { ERROR_SENTENCES, MY_PROFILE, NO_RESPONSE, UNEXPECTED, tooManyRequests } from './errorCodes';
 import {
   confirmEmailVerification,
   confirmPasswordReset,
@@ -123,6 +123,7 @@ describe('describeError', () => {
       recovery: null,
       fieldErrors,
       detail: null,
+      retryAfter: null,
     });
     expect(describeError(apiError(401, 'A003', '만료된 토큰입니다.'))).toMatchObject({
       code: 'A003',
@@ -145,6 +146,7 @@ describe('describeError', () => {
       recovery: null,
       fieldErrors: [],
       detail: null,
+      retryAfter: null,
     });
   });
 
@@ -163,6 +165,7 @@ describe('describeError', () => {
       recovery: null,
       fieldErrors: [],
       detail: null,
+      retryAfter: null,
     });
   });
 
@@ -181,6 +184,7 @@ describe('describeError', () => {
       recovery: null,
       fieldErrors: [],
       detail: '계약 위반 응답: success=true, data=null',
+      retryAfter: null,
     });
   });
 
@@ -192,5 +196,88 @@ describe('describeError', () => {
     ]);
     expect(fieldMessages(e, 'nickname')).toEqual(['닉네임은 2~10자여야 합니다.', '같은 필드의 두 번째 메시지']);
     expect(fieldMessages(new Error('x'), 'nickname')).toEqual([]);
+  });
+});
+
+/**
+ * 요청 수 제한의 `Retry-After` (sp-docs/plan/phase2-frontend-integration.md F-10). 정본의 값은 초 정수이고 최소 1 이다
+ * (security.md §10, api-contract.md §9.13). 그 모양이 아니면 없는 것으로 읽고, 그때도 `C009` 의 문장과 코드는 나간다.
+ */
+describe('Retry-After', () => {
+  const config = { headers: {} } as InternalAxiosRequestConfig;
+  const BODY = {
+    success: false,
+    data: null,
+    error: { code: 'C009', message: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.', fieldErrors: [] },
+  };
+  const tooMany = (headers: AxiosResponse['headers'], data: unknown = BODY) =>
+    new AxiosError('status 429', AxiosError.ERR_BAD_REQUEST, config, null, {
+      data,
+      status: 429,
+      statusText: '',
+      headers,
+      config,
+    } as AxiosResponse);
+
+  it('초 정수 — 그 초를 싣고 문장이 그 초를 말한다', () => {
+    expect(describeError(tooMany({ 'retry-after': '30' }))).toEqual({
+      text: '요청이 너무 많습니다. 30초 뒤에 다시 시도해 주세요.',
+      code: 'C009',
+      recovery: null,
+      fieldErrors: [],
+      detail: null,
+      retryAfter: 30,
+    });
+  });
+
+  it('브라우저가 준 헤더 모양(AxiosHeaders)에서도, 이름의 대소문자와 무관하게 읽는다', () => {
+    // XHR 어댑터는 `getAllResponseHeaders()` 의 문자열을 이렇게 읽는다.
+    expect(describeError(tooMany(AxiosHeaders.from('Content-Type: application/json\r\nRetry-After: 37\r\n'))).retryAfter).toBe(37);
+    expect(describeError(tooMany(new AxiosHeaders({ 'Retry-After': '37' }))).retryAfter).toBe(37);
+  });
+
+  it('60초부터는 분과 초로 말한다 — 한 시간 창의 제한은 수천 초다', () => {
+    expect(tooManyRequests(1)).toBe('요청이 너무 많습니다. 1초 뒤에 다시 시도해 주세요.');
+    expect(tooManyRequests(59)).toBe('요청이 너무 많습니다. 59초 뒤에 다시 시도해 주세요.');
+    expect(tooManyRequests(60)).toBe('요청이 너무 많습니다. 1분 뒤에 다시 시도해 주세요.');
+    expect(tooManyRequests(90)).toBe('요청이 너무 많습니다. 1분 30초 뒤에 다시 시도해 주세요.');
+    expect(tooManyRequests(3600)).toBe('요청이 너무 많습니다. 60분 뒤에 다시 시도해 주세요.');
+  });
+
+  it('헤더가 없다 — 초 없는 기본 문장이고 코드가 남는다', () => {
+    expect(describeError(tooMany({}))).toEqual({
+      text: ERROR_SENTENCES.C009.text,
+      code: 'C009',
+      recovery: null,
+      fieldErrors: [],
+      detail: null,
+      retryAfter: null,
+    });
+  });
+
+  it.each(['', ' ', 'abc', '0', '-5', '1.5', '30s', '1e3', 'Wed, 21 Oct 2015 07:28:00 GMT', '99999999999999999999'])(
+    '읽지 못하는 값 %j — 없는 것과 같다. 문장은 초 없이, 코드는 남는다',
+    (value) => {
+      expect(describeError(tooMany({ 'retry-after': value }))).toMatchObject({
+        text: ERROR_SENTENCES.C009.text,
+        code: 'C009',
+        retryAfter: null,
+      });
+    },
+  );
+
+  it('화면이 뜻을 넘겨도 C009 의 문장은 같다 — 화면마다 다르게 보이지 않는다', () => {
+    const view = describeError(tooMany({ 'retry-after': '30' }), { C009: { text: '다른 문장', recovery: 'login' } });
+    expect(view).toMatchObject({ text: '요청이 너무 많습니다. 30초 뒤에 다시 시도해 주세요.', recovery: null });
+  });
+
+  it('본문을 비운 사본(withoutRequestBody)도 헤더를 잃지 않는다 — 로그인 화면이 쥐는 것은 그 사본이다', async () => {
+    const { withoutRequestBody } = await import('./withoutRequestBody');
+    expect(describeError(withoutRequestBody(tooMany({ 'retry-after': '30' }))).retryAfter).toBe(30);
+  });
+
+  it('응답이 없거나 오류 응답이 아니면 null 이다', () => {
+    expect(describeError(new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, {})).retryAfter).toBeNull();
+    expect(describeError(new Error('x')).retryAfter).toBeNull();
   });
 });

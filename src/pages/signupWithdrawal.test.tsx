@@ -40,7 +40,8 @@ const tokens = (tag: string) => ({
   accessTokenExpiresIn: 1800,
 });
 
-type Reply = { status: number; body: unknown } | 'no-response';
+/** `headers` 는 응답 헤더다 — 요청 수 제한의 `Retry-After` 를 싣는다(F-10). */
+type Reply = { status: number; body: unknown; headers?: Record<string, string> } | 'no-response';
 type Handler = (config: InternalAxiosRequestConfig) => Reply | Promise<Reply>;
 type Routes = Record<string, Handler>;
 type FieldErrors = Array<{ field: string; message: string }>;
@@ -93,7 +94,13 @@ async function adapter(config: InternalAxiosRequestConfig): Promise<AxiosRespons
   const reply = await handler(config);
   // 응답이 없는 실패 — axios 가 연결 거부·CORS 거부에 내는 모양이다(`response` 가 없다).
   if (reply === 'no-response') throw new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, {});
-  const response = { data: reply.body, status: reply.status, statusText: '', headers: {}, config } as AxiosResponse;
+  const response = {
+    data: reply.body,
+    status: reply.status,
+    statusText: '',
+    headers: reply.headers ?? {},
+    config,
+  } as AxiosResponse;
   if (reply.status >= 400) {
     throw new AxiosError(`status ${reply.status}`, AxiosError.ERR_BAD_REQUEST, config, null, response);
   }
@@ -578,6 +585,91 @@ describe('인증 전의 로그인', () => {
   });
 });
 
+/* ───────── 로그인 잠금과 요청 수 제한 ───────── */
+
+/**
+ * 로그인 화면이 `AU005`(잠김)·`AU006`(미인증)·`C009`(요청 수 제한)를 가른다(sp-docs/plan/phase2-frontend-integration.md F-10).
+ * 가르는 것은 문장과 링크다 — 잠김은 비밀번호 찾기로, 미인증은 인증 메일을 다시 받는 화면으로 가고, 요청 수 제한은 링크 없이 기다릴
+ * 시간을 말한다. `AU006` 의 링크는 위 「인증 전의 로그인」 이 따라가 본다.
+ */
+const tooMany = (retryAfter?: string): Reply => ({
+  ...(fail(429, 'C009') as { status: number; body: unknown }),
+  headers: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+});
+/** 오류 상자 — 코드 자리를 품은 상자다(components/ui.tsx 의 `ErrorBox`). 로그인 화면은 그 밖에도 「비밀번호 찾기」 링크를 둔다. */
+const errorBoxOf = (code: string) => codeShown(code)!.closest('div')!;
+const linksIn = (el: Element) => within(el as HTMLElement).queryAllByRole('link').map((a) => a.getAttribute('href'));
+
+describe('로그인 잠금과 요청 수 제한', () => {
+  it('401 AU005 — 잠겼다고 하고 비밀번호 찾기로 안내한다. 비밀번호의 맞고 틀림을 말하지 않는다. 세션이 되지 않는다', async () => {
+    const { useAuthStore } = await renderApp('/login', { extra: { ...SIGNUP, [LOGIN]: () => fail(401, 'AU005') } });
+
+    submitFirstLogin();
+
+    await until([ERROR_SENTENCES.AU005.text], main);
+    const box = errorBoxOf('AU005');
+    expect(box).toBeVisible();
+    expect(linksIn(box)).toEqual(['/reset-password/request']);
+    expect(within(box).getByRole('link', { name: '비밀번호 찾기' })).toBeVisible();
+    // 화면 아래 안내의 같은 링크는 그동안 내린다 — 같은 곳으로 가는 링크를 둘 두지 않는다(LoginPage.tsx).
+    expect(within(main()).getAllByRole('link', { name: '비밀번호 찾기' })).toHaveLength(1);
+    // 잠긴 동안은 맞는 비밀번호에도 같은 응답이다(api-contract.md §2.1) — 틀렸다고도, 맞았다고도 하지 않는다.
+    expect(box).not.toHaveTextContent(ERROR_SENTENCES.AU003.text);
+    expect(box.textContent).not.toMatch(/일치|틀렸|맞지 않|잘못/);
+    expect(pathname()).toBe('/login');
+    expect(writes()).toEqual([LOGIN]);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: null, sessionGeneration: 0 });
+
+    fireEvent.click(within(box).getByRole('link', { name: '비밀번호 찾기' }));
+    await atPath('/reset-password/request');
+  });
+
+  it('403 AU006 — 오류 상자의 링크는 인증 메일 다시 받기 하나다(잠김의 안내와 섞이지 않는다)', async () => {
+    await renderApp('/login', { extra: { ...SIGNUP, [LOGIN]: () => fail(403, 'AU006') } });
+
+    submitFirstLogin();
+
+    await until([ERROR_SENTENCES.AU006.text], main);
+    expect(linksIn(errorBoxOf('AU006'))).toEqual(['/verify-email/resend']);
+    // 잠김이 아니면 화면 아래 안내의 「비밀번호 찾기」 는 그대로다.
+    expect(within(main()).getAllByRole('link', { name: '비밀번호 찾기' })).toHaveLength(1);
+    expect(main()).not.toHaveTextContent(ERROR_SENTENCES.AU005.text);
+  });
+
+  it('429 C009 + Retry-After 30 — 그 초를 말하고 코드가 남는다. 링크가 없다', async () => {
+    const { useAuthStore } = await renderApp('/login', { extra: { ...SIGNUP, [LOGIN]: () => tooMany('30') } });
+
+    submitFirstLogin();
+
+    await until(['요청이 너무 많습니다. 30초 뒤에 다시 시도해 주세요.'], main);
+    const box = errorBoxOf('C009');
+    expect(box).toBeVisible();
+    expect(linksIn(box)).toEqual([]);
+    expect(main()).not.toHaveTextContent(ERROR_SENTENCES.AU005.text);
+    expect(writes()).toEqual([LOGIN]);
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, sessionGeneration: 0 });
+  });
+
+  it('429 C009, Retry-After 없음 — 초 없이 안내하고 코드가 남는다', async () => {
+    await renderApp('/login', { extra: { ...SIGNUP, [LOGIN]: () => tooMany() } });
+
+    submitFirstLogin();
+
+    await until([ERROR_SENTENCES.C009.text], main);
+    expect(codeShown('C009')).toBeVisible();
+    expect(errorBoxOf('C009').textContent).not.toMatch(/\d+초|\d+분/);
+  });
+
+  it('429 C009, 읽지 못하는 Retry-After — 없는 것과 같다', async () => {
+    await renderApp('/login', { extra: { ...SIGNUP, [LOGIN]: () => tooMany('Wed, 21 Oct 2015 07:28:00 GMT') } });
+
+    submitFirstLogin();
+
+    await until([ERROR_SENTENCES.C009.text], main);
+    expect(codeShown('C009')).toBeVisible();
+  });
+});
+
 /* ───────── 비밀번호 찾기 ───────── */
 
 const REQUEST_RESET = 'POST /api/v1/accounts/password-reset';
@@ -674,6 +766,75 @@ describe('비밀번호 찾기', () => {
     submitResetRequest('user@example.com');
 
     await until([ERROR_SENTENCES.C005.text], main);
+    expect(main()).not.toHaveTextContent(REQUESTED);
+  });
+});
+
+/* ───────── 요청 수 제한 — 로그인 밖의 화면 ───────── */
+
+/**
+ * `C009` 를 받는 나머지 화면 — 중복 확인(이메일·닉네임)·가입·재설정 요청·재발송(sp-docs/plan/phase2-frontend-integration.md F-10,
+ * security.md §10 의 제한 대상). 화면마다 같은 문장과 코드이고 링크가 없다 — 문장은 `describeError` 하나가 만들고 화면은 헤더를
+ * 읽지 않는다. 문장은 글자로 적는다 — 그 함수로 기대값을 만들면 그 함수가 틀려도 통과한다.
+ */
+const CHECK_EMAIL = 'GET /api/v1/accounts/check-email';
+const CHECK_NICKNAME = 'GET /api/v1/members/check-nickname';
+
+/** 그 화면의 C009 안내 — 문장, 코드, 링크 없음. */
+async function rateLimitShown(sentence: string) {
+  await until([sentence], main);
+  expect(codeShown('C009')).toBeVisible();
+  expect(linksIn(errorBoxOf('C009'))).toEqual([]);
+  expect(main()).not.toHaveTextContent(ERROR_SENTENCES.AU005.text);
+}
+
+describe('요청 수 제한 — 로그인 밖의 화면', () => {
+  it('이메일 중복 확인 — Retry-After 45 의 초를 말한다. 확인 결과를 보이지 않는다', async () => {
+    await renderApp('/signup', { extra: { [CHECK_EMAIL]: () => tooMany('45') } });
+
+    type(screen.getByLabelText(/^이메일/), EMAIL);
+    fireEvent.click(within(main()).getByRole('button', { name: '중복 확인' }));
+
+    await rateLimitShown('요청이 너무 많습니다. 45초 뒤에 다시 시도해 주세요.');
+    expect(main()).not.toHaveTextContent('쓸 수 있는 이메일입니다');
+    expect(main()).not.toHaveTextContent('이미 쓰이고 있는 이메일입니다');
+  });
+
+  it('가입(계정 만들기) — Retry-After 없음. 초 없이 말하고 코드가 남는다. 메일 안내로 넘어가지 않는다', async () => {
+    await renderApp('/signup', { extra: { [CREATE_ACCOUNT]: () => tooMany() } });
+
+    submitAccount();
+
+    await rateLimitShown(ERROR_SENTENCES.C009.text);
+    expect(main()).not.toHaveTextContent(CHECK_MAIL);
+    expect(writes()).toEqual([CREATE_ACCOUNT]);
+  });
+
+  it('닉네임 중복 확인(member) — Retry-After 3600 을 분으로 말한다', async () => {
+    await renderApp('/signup/profile', { loggedIn: true, extra: { ...SIGNUP, [CHECK_NICKNAME]: () => tooMany('3600') } });
+
+    type(await screen.findByLabelText(/^닉네임/), '새닉');
+    fireEvent.click(within(main()).getByRole('button', { name: '중복 확인' }));
+
+    await rateLimitShown('요청이 너무 많습니다. 60분 뒤에 다시 시도해 주세요.');
+    expect(main()).not.toHaveTextContent('쓸 수 있는 닉네임입니다');
+  });
+
+  it('비밀번호 찾기(재설정 요청) — Retry-After 120 을 분으로 말한다. 요청을 받았다고 하지 않는다', async () => {
+    await renderApp('/reset-password/request', { extra: { [REQUEST_RESET]: () => tooMany('120') } });
+
+    submitResetRequest('user@example.com');
+
+    await rateLimitShown('요청이 너무 많습니다. 2분 뒤에 다시 시도해 주세요.');
+    expect(main()).not.toHaveTextContent(REQUESTED);
+  });
+
+  it('인증 메일 다시 받기 — Retry-After 없음. 초 없이 말하고 코드가 남는다. 요청을 받았다고 하지 않는다', async () => {
+    await renderApp('/verify-email/resend', { extra: { [RESEND]: () => tooMany() } });
+
+    submitResend('unverified@example.com');
+
+    await rateLimitShown(ERROR_SENTENCES.C009.text);
     expect(main()).not.toHaveTextContent(REQUESTED);
   });
 });

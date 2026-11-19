@@ -60,8 +60,13 @@ export const ERROR_SENTENCES: Record<string, Sentence> = {
   AU003: { text: '이메일 또는 비밀번호가 일치하지 않습니다.' },
   AU004: { text: '현재 비밀번호가 일치하지 않습니다.' },
   // 잠금은 비밀번호가 맞든 틀리든, 계정이 있든 없든 같은 응답이다(§8.4) — 문장도 그것을 말하지 않는다. 잠금 시간도 적지
-  // 않는다 — 값이 바뀌면 문장이 거짓이 된다(같은 절).
-  AU005: { text: '로그인 시도가 많아 지금은 로그인할 수 없습니다. 잠시 후 다시 시도해 주세요.' },
+  // 않는다 — 값이 바뀌면 문장이 거짓이 된다(같은 절). 로그인만 내는 코드다. 잠금은 시간이 지나면 풀리고 비밀번호 재설정 확인도
+  // 푼다(requirements/member.md §12.2) — 그래서 비밀번호 찾기 화면으로 안내한다(F-10). 재설정은 기다리지 않는 길로만 말하고
+  // 비밀번호를 잊었다거나 틀렸다고 말하지 않는다.
+  AU005: {
+    text: '로그인 시도가 많아 지금은 로그인할 수 없습니다. 잠시 후 다시 시도하거나 비밀번호를 재설정해 주세요.',
+    recovery: 'requestPasswordReset',
+  },
   // 비밀번호가 맞은 미인증 계정이다(§8.4) — 로그인만 낸다. 메일을 잃었거나 링크가 만료됐을 수 있으므로 인증 메일을 다시 받는 화면으로
   // 안내한다(F-08).
   AU006: { text: '이메일 인증을 마쳐야 로그인할 수 있습니다.', recovery: 'resendVerification' },
@@ -129,6 +134,19 @@ export const PASSWORD_RESET: Meanings = {
     recovery: 'requestPasswordReset',
   },
 };
+
+/**
+ * `C009`(요청 수 제한, api-contract.md §8.1)의 문장 — 어느 화면이든 이것 하나다(lib/api/client.ts 의 `describeError`).
+ * `retryAfter` 는 응답의 `Retry-After` 초다. 있으면 그 초를 말하고, 없으면 사전의 기본 문장이다 — 코드는 어느 쪽이든 코드 자리에
+ * 남는다. 한 시간 창의 제한은 수천 초가 될 수 있어(security.md §10) 60초부터는 분과 초로 말한다.
+ */
+export function tooManyRequests(retryAfter: number | null): string {
+  if (retryAfter === null) return ERROR_SENTENCES.C009.text;
+  const minutes = Math.floor(retryAfter / 60);
+  const seconds = retryAfter % 60;
+  const wait = [minutes > 0 ? `${minutes}분` : null, seconds > 0 ? `${seconds}초` : null].filter(Boolean).join(' ');
+  return `요청이 너무 많습니다. ${wait} 뒤에 다시 시도해 주세요.`;
+}
 
 /** 응답이 아예 없는 실패 — 연결 거부·CORS 거부·타임아웃. 업무 오류와 다른 문장이다. */
 export const NO_RESPONSE = '서버에 연결하지 못했습니다. 인터넷 연결을 확인하고 잠시 후 다시 시도해 주세요.';

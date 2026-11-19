@@ -1,7 +1,15 @@
-import axios, { AxiosError, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, AxiosHeaders, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
 import { baseUrlFor, serviceOf } from './services';
 import type { ApiResponse, ErrorResponse, FieldError, TokenResponse } from './types';
-import { ERROR_SENTENCES, NO_RESPONSE, UNEXPECTED, type Meanings, type Recovery } from './errorCodes';
+import {
+  ERROR_SENTENCES,
+  NO_RESPONSE,
+  UNEXPECTED,
+  tooManyRequests,
+  type Meanings,
+  type Recovery,
+  type Sentence,
+} from './errorCodes';
 import { useAuthStore } from '@/stores/authStore';
 import { useApiLogStore } from '@/stores/apiLogStore';
 import { DEV_ONLY } from '@/lib/devOnly';
@@ -314,6 +322,26 @@ export interface ErrorView {
   fieldErrors: FieldError[];
   /** 오류 응답의 모양이 아닌 실패의 원문. 사용자에게 보여줄 문장이 아니라서 개발 빌드에서만 그린다. */
   detail: string | null;
+  /** 응답의 `Retry-After`(초). 없거나 읽지 못하면 null 이다 — `retryAfterOf`. */
+  retryAfter: number | null;
+}
+
+/**
+ * 오류 응답의 `Retry-After` 를 초로 읽는다. 정본의 값은 초 정수다 — 창이 끝날 때까지 남은 초의 올림이고 최소 1 이다
+ * (sp-docs/security.md §10, api-contract.md §8.1·§9.13). 그 모양(1 이상의 십진 정수)이 아니면 null 이다 — HTTP 가 허용하는
+ * 날짜 형식도 정본이 쓰지 않으므로 읽지 않는다. 0 은 정본의 최소값 밖이고 「0초 뒤」 라고 말할 수도 없다.
+ *
+ * 직접 호출 모드에서 브라우저가 이 헤더를 스크립트에 보이는 것은 서버의 노출 설정이고(security.md §1.1), 노출되지 않으면 여기서는
+ * 없는 것과 같다 — 그때도 문장은 초 없이 나가고 코드는 남는다. 그 노출은 스텁으로 재지 못한다(I-10 이 잰다).
+ */
+function retryAfterOf(e: unknown): number | null {
+  if (!axios.isAxiosError(e) || !e.response) return null;
+  // 이름의 대소문자를 가리지 않고 읽는다 — `AxiosHeaders.get` 이 그렇게 찾는다.
+  const headers = AxiosHeaders.from(e.response.headers as Parameters<typeof AxiosHeaders.from>[0]);
+  const value: unknown = headers.get('retry-after');
+  if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) return null;
+  const seconds = Number(value.trim());
+  return Number.isSafeInteger(seconds) && seconds >= 1 ? seconds : null;
 }
 
 /**
@@ -323,22 +351,37 @@ export interface ErrorView {
  *
  * 같은 코드가 엔드포인트마다 다른 뜻이면 그 엔드포인트를 부른 쪽이 `meanings` 를 넘긴다(errorCodes.ts 의
  * `MY_PROFILE`). 넘기지 않으면 기본 뜻이다.
+ *
+ * **`C009` 의 문장은 어느 화면에서든 `tooManyRequests` 하나가 만든다** — `Retry-After` 의 초가 있으면 그 초를 말하고, 없으면
+ * 초 없이 말한다. 화면은 헤더를 읽지 않고 `meanings` 로 그 문장을 바꾸지 않는다(sp-docs/plan/phase2-frontend-integration.md F-10).
  */
 export function describeError(e: unknown, meanings: Meanings = {}): ErrorView {
   const error = errorOf(e);
+  const retryAfter = retryAfterOf(e);
   if (error) {
-    const known = meanings[error.code] ?? ERROR_SENTENCES[error.code];
+    const known: Sentence | undefined =
+      error.code === 'C009' ? { text: tooManyRequests(retryAfter) } : (meanings[error.code] ?? ERROR_SENTENCES[error.code]);
     return {
       text: known ? known.text : error.message,
       code: error.code,
       recovery: known?.recovery ?? null,
       fieldErrors: error.fieldErrors ?? [],
       detail: null,
+      retryAfter,
     };
   }
   if (axios.isAxiosError(e)) {
-    if (!e.response) return { text: NO_RESPONSE, code: null, recovery: null, fieldErrors: [], detail: null };
-    return { text: UNEXPECTED, code: `HTTP ${e.response.status}`, recovery: null, fieldErrors: [], detail: e.message };
+    if (!e.response) {
+      return { text: NO_RESPONSE, code: null, recovery: null, fieldErrors: [], detail: null, retryAfter: null };
+    }
+    return {
+      text: UNEXPECTED,
+      code: `HTTP ${e.response.status}`,
+      recovery: null,
+      fieldErrors: [],
+      detail: e.message,
+      retryAfter,
+    };
   }
   return {
     text: UNEXPECTED,
@@ -346,6 +389,7 @@ export function describeError(e: unknown, meanings: Meanings = {}): ErrorView {
     recovery: null,
     fieldErrors: [],
     detail: e instanceof Error ? e.message : String(e),
+    retryAfter: null,
   };
 }
 

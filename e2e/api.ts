@@ -21,6 +21,8 @@ export interface FieldError {
 export interface Reply {
   status: number;
   body?: unknown;
+  /** 더 싣는 응답 헤더 — 요청 수 제한의 `Retry-After` 가 쓴다(`tooMany`). */
+  headers?: Record<string, string>;
 }
 
 /** 요청 하나의 답. 함수면 요청을 보고 답한다 — 앞선 요청에 따라 답이 바뀌는 흐름(가입)이 쓴다. 답을 미루려면 Promise 를 돌려준다. */
@@ -37,6 +39,7 @@ export const NO_CONTENT: Reply = { status: 204 };
 const ERRORS = {
   C001: { status: 400, message: '잘못된 입력값입니다.' },
   C005: { status: 500, message: '서버 내부 오류가 발생했습니다.' },
+  C009: { status: 429, message: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.' },
   A002: { status: 401, message: '유효하지 않은 토큰입니다.' },
   M001: { status: 404, message: '프로필을 찾을 수 없습니다.' },
   M007: { status: 409, message: '탈퇴한 프로필입니다.' },
@@ -44,6 +47,7 @@ const ERRORS = {
   P003: { status: 403, message: '공지를 작성하거나 변경할 권한이 없습니다.' },
   S002: { status: 403, message: '활성 프로필이 필요합니다.' },
   AU003: { status: 401, message: '이메일 또는 비밀번호가 일치하지 않습니다.' },
+  AU005: { status: 401, message: '로그인 시도가 많아 잠시 로그인할 수 없습니다.' },
   AU006: { status: 403, message: '이메일 인증이 필요합니다.' },
   AU007: { status: 400, message: '링크가 유효하지 않거나 만료되었습니다.' },
 } as const;
@@ -51,6 +55,16 @@ const ERRORS = {
 export const fail = (code: keyof typeof ERRORS, fieldErrors: FieldError[] = []): Reply => ({
   status: ERRORS[code].status,
   body: { success: false, data: null, error: { code, message: ERRORS[code].message, fieldErrors } },
+});
+
+/**
+ * 요청 수 제한의 429 `C009`(api-contract.md §8.1·§9.13). `Retry-After` 는 초다. 교차 출처 응답이라 노출해야 화면의 스크립트가
+ * 읽는다 — auth·member 가 `Retry-After` 를 노출하는 것(security.md §1.1)을 스텁도 따른다. 서버가 그렇게 하는지는 스텁으로 재지
+ * 못한다(I-10). 요청 수 제한 자체는 재지 않는다 — 이 답은 화면이 그 응답을 어떻게 보이는지만 본다(F-10).
+ */
+export const tooMany = (retryAfter: number): Reply => ({
+  ...fail('C009'),
+  headers: { 'Retry-After': String(retryAfter), 'Access-Control-Expose-Headers': 'Retry-After' },
 });
 
 /** §7.1. 한 쪽짜리 페이지다. */
@@ -261,7 +275,7 @@ export class ApiStub {
       const reply = typeof answer === 'function' ? await answer(request) : answer;
       await route.fulfill({
         status: reply.status,
-        headers: { 'Access-Control-Allow-Origin': stub.origin },
+        headers: { 'Access-Control-Allow-Origin': stub.origin, ...reply.headers },
         contentType: 'application/json',
         body: reply.body === undefined ? '' : JSON.stringify(reply.body),
       });

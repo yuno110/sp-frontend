@@ -48,6 +48,10 @@ async function landing(client: QueryClient): Promise<string> {
  * 그래서 클라이언트에서 형식을 미리 막지 않는다. 서버가 어떤 코드를 내는지 보는 것이 목적이다.
  *
  * 인증 전의 계정은 비밀번호가 맞으면 403 `AU006` 이다(§2.1) — 그 오류가 인증 메일을 다시 받는 화면으로 안내한다(errorCodes.ts).
+ * 잠긴 이메일은 비밀번호가 맞든 틀리든 401 `AU005` 이고 비밀번호 찾기 화면으로 안내한다. 요청 수 제한은 429 `C009` 이고 문장은
+ * 어느 화면과도 같은 것이다(client.ts 의 `describeError`). 셋 다 아래 `ErrorBox` 가 가른다. 이 화면이 코드를 읽는 것은 하나다 —
+ * `AU005` 의 오류 상자에 「비밀번호 찾기」 링크가 있으므로 그동안 아래 안내의 같은 링크를 내린다(CLAUDE.md 「화면 문구와 오류 표시」,
+ * 같은 곳으로 가는 링크를 둘 두지 않는다).
  */
 export function LoginPage() {
   const navigate = useNavigate();
@@ -57,6 +61,7 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const locked = errorOf(error)?.code === 'AU005';
 
   // 세션을 끝낸 실패 — 보호된 화면은 토큰이 비면 이리로 오면서 그 오류를 잃는다. 여기서 이어 보이고 저장소에서는
   // 지운다(한 번만 보인다, stores/authStore.ts 의 `sessionFailure`). 이 화면이 그려진 뒤에 남겨진 실패도 받는다 —
@@ -145,11 +150,16 @@ export function LoginPage() {
           </Button>
         </form>
         <p className="mt-3 text-xs text-faint">
-          계정이 없으면 <Link to="/signup" className="text-accent-600 underline">가입</Link>. 비밀번호를 잊었다면{' '}
-          <Link to="/reset-password/request" className="text-accent-600 underline">
-            비밀번호 찾기
-          </Link>
-          .
+          계정이 없으면 <Link to="/signup" className="text-accent-600 underline">가입</Link>.
+          {locked ? null : (
+            <>
+              {' '}비밀번호를 잊었다면{' '}
+              <Link to="/reset-password/request" className="text-accent-600 underline">
+                비밀번호 찾기
+              </Link>
+              .
+            </>
+          )}
           {DEV_ONLY
             ? ' 가입은 계정 → 이메일 인증 → 로그인 → 프로필 순서다 (api-contract.md §9.1·§9.10). 로그인 뒤 내 프로필 조회가 M001 이면 프로필 등록으로 간다.'
             : null}

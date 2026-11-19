@@ -25,6 +25,7 @@ import {
   likeState,
   ok,
   pageOf,
+  tooMany,
   type Routes,
   type Who,
 } from './api.ts';
@@ -120,6 +121,39 @@ const SCREENS: Screen[] = [
     ready: async (p) => {
       await codeShown(p, 'AU006');
       await expect(main(p).getByRole('link', { name: '인증 메일 다시 받기' })).toBeVisible();
+    },
+  },
+  {
+    // 오류 상자의 「비밀번호 찾기」 와 화면 아래의 같은 링크가 함께 보인다 — 이름도 가는 곳도 같다.
+    route: '/login',
+    state: '잠긴 이메일',
+    path: '/login',
+    api: { 'POST /api/v1/auth/login': fail('AU005') },
+    act: async (p) => {
+      await main(p).getByLabel(/^이메일/).fill('user@example.com');
+      await main(p).getByLabel(/^비밀번호/).fill('Passw0rd!');
+      await main(p).getByRole('button', { name: '로그인' }).click();
+    },
+    ready: async (p) => {
+      await codeShown(p, 'AU005');
+      // 오류 상자의 링크만 남는다 — 화면 아래 안내의 같은 링크는 그동안 내린다(LoginPage.tsx).
+      await expect(main(p).getByRole('link', { name: '비밀번호 찾기' })).toHaveCount(1);
+    },
+  },
+  {
+    route: '/login',
+    state: '요청 수 제한',
+    path: '/login',
+    api: { 'POST /api/v1/auth/login': tooMany(30) },
+    act: async (p) => {
+      await main(p).getByLabel(/^이메일/).fill('user@example.com');
+      await main(p).getByLabel(/^비밀번호/).fill('Passw0rd!');
+      await main(p).getByRole('button', { name: '로그인' }).click();
+    },
+    // 브라우저가 노출된 `Retry-After` 를 읽어야 초가 보인다.
+    ready: async (p) => {
+      await codeShown(p, 'C009');
+      await expect(main(p).getByText('요청이 너무 많습니다. 30초 뒤에 다시 시도해 주세요.')).toBeVisible();
     },
   },
 

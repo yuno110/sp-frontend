@@ -32,7 +32,8 @@ const tokenOf = (who: Who) =>
     'signature',
   ].join('.');
 
-type Reply = { status: number; body: unknown } | 'no-response';
+/** `headers` 는 응답 헤더다 — 요청 수 제한의 `Retry-After` 를 싣는다(F-10). */
+type Reply = { status: number; body: unknown; headers?: Record<string, string> } | 'no-response';
 type Routes = Record<string, (config: InternalAxiosRequestConfig) => Reply | Promise<Reply>>;
 type FieldErrors = Array<{ field: string; message: string }>;
 
@@ -41,6 +42,7 @@ const SERVER_MESSAGE: Record<string, string> = {
   C001: '잘못된 입력값입니다.',
   C004: '요청한 리소스를 찾을 수 없습니다.',
   C005: '서버 내부 오류가 발생했습니다.',
+  C009: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
   A001: '인증이 필요합니다.',
   A002: '유효하지 않은 토큰입니다.',
   A003: '만료된 토큰입니다.',
@@ -53,6 +55,7 @@ const SERVER_MESSAGE: Record<string, string> = {
   S002: '활성 프로필이 필요합니다.',
   AU003: '이메일 또는 비밀번호가 일치하지 않습니다.',
   AU004: '현재 비밀번호가 일치하지 않습니다.',
+  AU005: '로그인 시도가 많아 잠시 로그인할 수 없습니다.',
   AU006: '이메일 인증이 필요합니다.',
   AU007: '링크가 유효하지 않거나 만료되었습니다.',
 };
@@ -63,6 +66,8 @@ const fail = (status: number, code: string, fieldErrors: FieldErrors = [], messa
   status,
   body: { success: false, data: null, error: { code, message, fieldErrors } },
 });
+/** 요청 수 제한 — `Retry-After` 는 상태마다 붙인다. */
+const TOO_MANY = fail(429, 'C009') as { status: number; body: unknown };
 
 const PROFILE = { accountId: 7, nickname: '테스트닉' };
 const ACCOUNT = { email: 'user@example.com', createdAt: '2026-10-27T10:00:00' };
@@ -150,7 +155,13 @@ async function adapter(config: InternalAxiosRequestConfig): Promise<AxiosRespons
   const reply = await handler(config);
   // 응답이 없는 실패 — axios 가 연결 거부·CORS 거부에 내는 모양이다(`response` 가 없다).
   if (reply === 'no-response') throw new AxiosError('Network Error', AxiosError.ERR_NETWORK, config, {});
-  const response = { data: reply.body, status: reply.status, statusText: '', headers: {}, config } as AxiosResponse;
+  const response = {
+    data: reply.body,
+    status: reply.status,
+    statusText: '',
+    headers: reply.headers ?? {},
+    config,
+  } as AxiosResponse;
   if (reply.status >= 400) {
     throw new AxiosError(`status ${reply.status}`, AxiosError.ERR_BAD_REQUEST, config, null, response);
   }
@@ -658,6 +669,33 @@ const COPY_STATES: CopyState[] = [
       fireEvent.submit(main().querySelector('form')!);
       await errorShown();
       await until(['인증 메일 다시 받기'], main);
+    },
+  },
+  {
+    name: '로그인 — 잠긴 이메일(AU005)',
+    path: '/login',
+    extra: { 'POST /api/v1/auth/login': () => fail(401, 'AU005') },
+    ready: async () => {
+      fireEvent.submit(main().querySelector('form')!);
+      await until([ERROR_SENTENCES.AU005.text], main);
+    },
+  },
+  {
+    name: '로그인 — 요청 수 제한(C009), 기다릴 시간이 있음',
+    path: '/login',
+    extra: { 'POST /api/v1/auth/login': () => ({ ...TOO_MANY, headers: { 'retry-after': '90' } }) },
+    ready: async () => {
+      fireEvent.submit(main().querySelector('form')!);
+      await until(['1분 30초 뒤에 다시 시도해 주세요.'], main);
+    },
+  },
+  {
+    name: '로그인 — 요청 수 제한(C009), 기다릴 시간이 없음',
+    path: '/login',
+    extra: { 'POST /api/v1/auth/login': () => TOO_MANY },
+    ready: async () => {
+      fireEvent.submit(main().querySelector('form')!);
+      await until([ERROR_SENTENCES.C009.text], main);
     },
   },
   {

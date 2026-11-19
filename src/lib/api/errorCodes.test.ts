@@ -108,6 +108,12 @@ describe('복구 동작', () => {
     expect(ERROR_SENTENCES.S001.text).toContain('잠시 후 다시 시도');
   });
 
+  // 잠긴 동안의 응답은 비밀번호가 맞든 틀리든 같다(api-contract.md §2.1·§8.4) — 문장이 그 어느 쪽도 말하지 않는다.
+  it('AU005 — 비밀번호 찾기로. 비밀번호의 맞고 틀림을 말하지 않는다', () => {
+    expect(ERROR_SENTENCES.AU005.recovery).toBe('requestPasswordReset');
+    expect(ERROR_SENTENCES.AU005.text).not.toMatch(/일치|틀렸|맞지 않|잘못|잊/);
+  });
+
   it('AU006 — 인증 메일을 다시 받는 화면으로. 로그인만 내는 코드다', () => {
     expect(ERROR_SENTENCES.AU006.recovery).toBe('resendVerification');
   });
@@ -126,6 +132,6 @@ describe('복구 동작', () => {
     const withRecovery = Object.entries(ERROR_SENTENCES)
       .filter(([, s]) => s.recovery)
       .map(([code]) => code);
-    expect(sorted(withRecovery)).toEqual(['A001', 'A002', 'A003', 'AU006', 'M007', 'S002']);
+    expect(sorted(withRecovery)).toEqual(['A001', 'A002', 'A003', 'AU005', 'AU006', 'M007', 'S002']);
   });
 });
